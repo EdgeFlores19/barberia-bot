@@ -21,7 +21,7 @@
   .quien{flex:1;min-width:0}
   .quien b{display:block;font-size:15px;font-weight:600}
   .quien span{font-size:12px;color:var(--sub)}
-  .chat{flex:1;overflow-y:auto;padding:16px 12px 8px;display:flex;flex-direction:column;gap:6px;
+  .chat{flex:1;min-height:0;overflow-y:auto;padding:16px 12px 8px;display:flex;flex-direction:column;gap:6px;
     background-image:radial-gradient(rgba(255,255,255,.02) 1px,transparent 1px);background-size:18px 18px}
   .fila{display:flex;width:100%}
   .fila.mio{justify-content:flex-end}
@@ -48,7 +48,7 @@
   .gate button{background:var(--acento);border:none;color:#0b141a;font-weight:600;padding:10px 22px;
     border-radius:10px;cursor:pointer;font-family:inherit;font-size:14px}
   .gate .err{color:#f15c6d;font-size:12.5px;min-height:16px}
-  .escritorio{position:relative;display:flex;flex-direction:column;height:100%}
+  .escritorio{position:relative;display:flex;flex-direction:column;flex:1;min-height:0}
   .nota{position:absolute;bottom:70px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.65);
     color:#c8d2d6;font-size:11px;padding:4px 10px;border-radius:10px;pointer-events:none}
 </style>
@@ -108,7 +108,7 @@ function burbuja(texto, quien, opciones){
   fila.appendChild(b); chat.appendChild(fila);
   chat.scrollTop = chat.scrollHeight;
 }
-function pintar(respuestas){ (respuestas||[]).forEach(r => burbuja(r.texto, 'bot', r.opciones)); }
+function pintar(respuestas){ (respuestas||[]).forEach(r => burbuja(r.texto, 'bot', r.opciones)); input.focus(); }
 function esperar(on){
   document.getElementById('estado').textContent = on ? 'escribiendo…' : 'en línea';
 }
