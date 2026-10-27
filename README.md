@@ -14,6 +14,18 @@ conectado a un número real de WhatsApp, se usa desde un chat web con la estéti
 - **Cancelar / reagendar** con el folio de la cita, libre hasta 2 h antes.
 - **Hablar con el barbero**: handoff y se registra en la conversación.
 
+Cada cita confirmada recibe un **folio** legible por teléfono (`NVZ-7K4Q`, sin `0/O` ni `1/I/L`).
+Es la llave para ver, mover o cancelar la cita: en v1 no hay login.
+
+## Dónde viven las citas
+
+- **SQLite es la fuente de verdad** (`barberia.db`, configurable con `DB_FILE`). Los horarios
+  ocupados, los folios y los estados (`confirmada` / `cancelada`) salen de ahí.
+- **Google Calendar es solo un espejo opcional.** Se activa con `GOOGLE_CALENDAR_ID` y
+  `GOOGLE_TOKEN_JSON`; si el token expira o la API falla, el bot sigue agendando igual y lo
+  anota en el log. Calendar no sabe de dobles reservas, asi que nunca se usa para decidir
+  disponibilidad.
+
 Fuera de v1 a propósito: pagos, promociones, lealtad, multi-sucursal, multi-barbero,
 recordatorios salientes 24 h antes y penalizaciones por cancelar.
 
@@ -46,6 +58,12 @@ Abre <http://127.0.0.1:8077> y usa el código de acceso `navajazo` (configurable
 
 Recorre código inválido → sesión → agendar → doble reserva → FAQ → handoff y falla si algo se rompe.
 
+Pruebas rápidas (sin servidor, SQLite temporal):
+
+```bash
+.venv/Scripts/python -m pytest tests/ -q --ignore=tests/smoke_test.py
+```
+
 ## Estructura
 
 ```
@@ -53,7 +71,9 @@ app/
   main.py      FastAPI: /, /api/sesion, /api/mensaje, /api/negocio, /health
   engine.py    motor conversacional determinista (máquina de estados + intenciones)
   llm.py       matching de FAQ local + capa DeepSeek opcional con fallback
-  store.py     citas (en memoria en F1, SQLite en F2)
+  slots.py     disponibilidad: horario del negocio, alto del servicio, huecos ocupados
+  store.py     citas en SQLite: folio, doble reserva, cancelar y reagendar
+  calendar_sync.py  espejo opcional a Google Calendar (best-effort, por REST)
   config.py    configuración por variables de entorno
 data/
   barberia.json   negocio, horario, reglas de agenda, servicios, FAQ
@@ -61,6 +81,8 @@ static/
   index.html      chat web estilo WhatsApp (acceso por código)
 tests/
   smoke_test.py   prueba end-to-end contra el servidor
+  test_engine.py  agendar, folio, cancelar y reagendar
+  test_slots.py   cálculo de disponibilidad
 ```
 
 ## Controles de acceso (es una demo pública)
@@ -72,5 +94,5 @@ tests/
 ## Roadmap
 
 - **F1 (hecho)**: datos + FAQ + chat local funcionando.
-- **F2**: agenda con SQLite, cancelar/reagendar, sync opcional a Google Calendar.
+- **F2 (hecho)**: agenda con SQLite, folio, cancelar/reagendar, sync opcional a Google Calendar.
 - **F3**: deploy en Render, Docker, README con capturas, repo público.
