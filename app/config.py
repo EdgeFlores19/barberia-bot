@@ -9,6 +9,10 @@ STATIC_DIR = BASE_DIR / "static"
 # Base de datos (fuente de verdad de las citas)
 DB_FILE = Path(os.getenv("DB_FILE", str(BASE_DIR / "barberia.db")))
 
+# Citas de ejemplo al arrancar con la agenda vacía.
+# En el plan free de Render el disco se reinicia junto con el servicio.
+SEED_DEMO = os.getenv("SEED_DEMO", "1").strip().lower() not in {"0", "false", "no", ""}
+
 # Acceso a la demo
 DEMO_CODE = os.getenv("DEMO_CODE", "navajazo")
 

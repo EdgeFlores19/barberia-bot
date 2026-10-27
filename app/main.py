@@ -8,13 +8,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, engine, store
+from . import config, engine, seed, store
 
 app = FastAPI(title="Barbería El Navajazo — bot demo")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 
 DATOS = engine.cargar_datos()
 store.init()
+if config.SEED_DEMO:
+    # El plan free de Render reinicia el disco: sin esto la agenda abre vacía.
+    seed.sembrar_si_vacio(DATOS)
 
 
 class Entrada(BaseModel):

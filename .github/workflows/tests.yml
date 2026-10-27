@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt pytest
+      - name: Pruebas unitarias
+        run: python -m pytest tests/ -q --ignore=tests/smoke_test.py
+      - name: Smoke test HTTP
+        run: |
+          python -m uvicorn app.main:app --port 8077 --log-level warning &
+          sleep 5
+          python tests/smoke_test.py http://127.0.0.1:8077 navajazo

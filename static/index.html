@@ -105,7 +105,8 @@ function burbuja(texto, quien, opciones){
     opciones.forEach(op => {
       const btn = document.createElement('button');
       btn.textContent = op.label;
-      btn.onclick = () => enviar(op.id);
+      // Al motor le viaja el id; a la burbuja, la etiqueta legible.
+      btn.onclick = () => enviar(op.id, false, op.label);
       o.appendChild(btn);
     });
     b.appendChild(o);
@@ -123,9 +124,9 @@ function esperar(on){
   document.getElementById('estado').textContent = on ? 'escribiendo…' : 'en línea';
 }
 
-async function enviar(texto, silencioso){
+async function enviar(texto, silencioso, etiqueta){
   if (!texto.trim() || !sid) return;
-  if (!silencioso) burbuja(texto, 'mio');
+  if (!silencioso) burbuja(etiqueta || texto, 'mio');
   input.value = ''; esperar(true);
   try{
     const r = await fetch('/api/mensaje', {method:'POST',headers:{'Content-Type':'application/json'},
