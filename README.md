@@ -2,6 +2,9 @@
 
 [![tests](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml)
 
+**Demo en vivo:** <https://navajazo-bot.onrender.com> · código de acceso `navajazo`
+*(plan free: si estuvo dormida, la primera carga tarda ~50 s)*
+
 Asistente conversacional para una barbería: responde preguntas frecuentes, agenda citas
 y pasa la conversación a una persona cuando hace falta. Es un **proyecto muestra**: no está
 conectado a un número real de WhatsApp, se usa desde un chat web con la estética de WhatsApp.
