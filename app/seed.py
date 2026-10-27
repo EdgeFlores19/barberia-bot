@@ -36,12 +36,10 @@ def sembrar_si_vacio(datos: dict[str, Any], ahora: datetime | None = None) -> in
         libres = horarios.generar_slots(
             datos, servicio_id, store.confirmadas(), ahora, limite=500
         )
-        objetivo = (ahora + timedelta(days=dias)).date().isoformat()
-        del_dia = [s for s in libres if s.startswith(objetivo)]
-        if not del_dia:
+        slot = _primer_hueco(libres, ahora, dias)
+        if not slot:
+            log.warning("sin horario para %s a %s días, se omite", servicio_id, dias)
             continue
-        # Un poco después de la apertura: se ve natural y deja huecos tempranos libres.
-        slot = del_dia[min(2, len(del_dia) - 1)]
         try:
             store.crear(slot, servicio_id, nombre, telefono)
         except store.SlotOcupado:
@@ -52,3 +50,14 @@ def sembrar_si_vacio(datos: dict[str, Any], ahora: datetime | None = None) -> in
     if creadas:
         log.info("sembradas %s citas de ejemplo", creadas)
     return creadas
+
+
+def _primer_hueco(libres: list[str], ahora: datetime, dias: int) -> str | None:
+    """Hueco del día pedido o del siguiente que abra (el domingo la barbería cierra)."""
+    for salto in range(dias, dias + 8):
+        objetivo = (ahora + timedelta(days=salto)).date().isoformat()
+        del_dia = [s for s in libres if s.startswith(objetivo)]
+        if del_dia:
+            # Un poco después de la apertura: se ve natural y deja huecos tempranos libres.
+            return del_dia[min(2, len(del_dia) - 1)]
+    return None

@@ -43,3 +43,12 @@ def test_no_siembra_dos_veces():
     seed.sembrar_si_vacio(DATOS, ahora=ahora)
     assert seed.sembrar_si_vacio(DATOS, ahora=ahora) == 0
     assert len(store.listar()) == 2
+
+
+def test_salta_al_dia_siguiente_si_el_objetivo_esta_cerrado():
+    # Martes 27 de octubre de 2026: +5 días cae domingo, que la barbería cierra.
+    ahora = datetime(2026, 10, 27, 9, 0)
+    assert seed.sembrar_si_vacio(DATOS, ahora=ahora) == 2
+    dias = {cita["slot"][:10] for cita in store.listar()}
+    assert "2026-11-01" not in dias          # domingo: no debe sembrarse ahí
+    assert "2026-11-02" in dias              # lunes: el hueco se corre un día
