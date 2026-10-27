@@ -20,7 +20,7 @@ services:
       - key: MAX_MENSAJES_POR_SESION
         value: 30
       - key: MAX_MENSAJES_POR_DIA
-        value: 200
+        value: 600
       - key: SEED_DEMO
         value: 1
       # Google Calendar apagado a propósito: el token es personal.

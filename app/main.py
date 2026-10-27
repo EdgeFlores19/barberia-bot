@@ -1,6 +1,7 @@
 """FastAPI: chat de demo con estética WhatsApp."""
 from __future__ import annotations
 
+import os
 import uuid
 
 from fastapi import FastAPI, HTTPException
@@ -80,4 +81,9 @@ def citas():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "llm": bool(config.DEEPSEEK_API_KEY)}
+    # `commit` deja ver qué versión está sirviendo Render (lo inyecta la plataforma).
+    return {
+        "ok": True,
+        "llm": bool(config.DEEPSEEK_API_KEY),
+        "commit": os.getenv("RENDER_GIT_COMMIT", "local")[:7],
+    }
