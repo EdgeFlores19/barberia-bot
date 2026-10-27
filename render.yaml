@@ -18,7 +18,7 @@ services:
       - key: DEEPSEEK_API_KEY
         sync: false
       - key: MAX_MENSAJES_POR_SESION
-        value: 15
+        value: 30
       - key: MAX_MENSAJES_POR_DIA
         value: 200
       - key: SEED_DEMO

@@ -108,7 +108,7 @@ en el repo:
 |---|---|
 | `DEMO_CODE` | código de acceso de la demo |
 | `DEEPSEEK_API_KEY` | key dedicada con saldo bajo |
-| `MAX_MENSAJES_POR_SESION` | `15` |
+| `MAX_MENSAJES_POR_SESION` | `30` |
 | `MAX_MENSAJES_POR_DIA` | `200` |
 | `SEED_DEMO` | `1` |
 | `GOOGLE_CALENDAR_ID` | vacío: el token de Calendar es personal y no se publica |
@@ -123,7 +123,7 @@ Dos cosas honestas del plan free:
 ## Controles de acceso (es una demo pública)
 
 1. `DEMO_CODE` como primera pantalla.
-2. Presupuesto duro de mensajes: 15 por sesión, 200 por día, con contador en SQLite que pausa el bot.
+2. Presupuesto duro de mensajes: 30 por sesión, 200 por día, con contador en memoria/SQLite que pausa el bot.
 3. Key de DeepSeek dedicada con saldo bajo, para que el techo de gasto sea real.
 
 ## Roadmap

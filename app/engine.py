@@ -174,7 +174,11 @@ async def manejar(sid: str, texto: str, datos: dict[str, Any]) -> tuple[list[dic
     if USO_DIA["fecha"] != datetime.now().date():
         USO_DIA.update(fecha=datetime.now().date(), n=0)
     USO_DIA["n"] += 1
-    if USO_DIA["n"] > config.MAX_MENSAJES_POR_DIA or s.mensajes > config.MAX_MENSAJES_POR_SESION:
+    if s.mensajes > config.MAX_MENSAJES_POR_SESION:
+        # Un visitante que explora FAQ + agendar + cancelar ronda los 25 mensajes.
+        return [_t("Esta sesión de demo llegó a su tope de mensajes. Recarga la página para "
+                   f"empezar otra, o escríbeme directo: {datos['telefono']}.")], s
+    if USO_DIA["n"] > config.MAX_MENSAJES_POR_DIA:
         return [_t("La demo llegó a su límite de mensajes por hoy. Escríbeme directo y seguimos: "
                    f"{datos['telefono']}.")], s
 
