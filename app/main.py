@@ -1,10 +1,11 @@
 """FastAPI: chat de demo con estética WhatsApp."""
 from __future__ import annotations
 
+import hmac
 import os
 import uuid
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -74,9 +75,28 @@ async def mensaje(body: Entrada):
     }
 
 
+_SIN_DATOS_PERSONALES = ("telefono", "calendar_event_id")
+
+
+def _exige_admin(x_admin_token: str | None) -> None:
+    """503 si la ruta no está configurada; 401 si el token falta o no coincide."""
+    if not config.ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="ADMIN_TOKEN no configurado")
+    if not x_admin_token or not hmac.compare_digest(
+        x_admin_token.encode(), config.ADMIN_TOKEN.encode()
+    ):
+        raise HTTPException(status_code=401, detail="no autorizado")
+
+
 @app.get("/api/citas")
-def citas():
-    return {"citas": store.listar()}
+def citas(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")):
+    _exige_admin(x_admin_token)
+    return {
+        "citas": [
+            {k: v for k, v in c.items() if k not in _SIN_DATOS_PERSONALES}
+            for c in store.listar()
+        ]
+    }
 
 
 @app.get("/health")

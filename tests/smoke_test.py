@@ -3,9 +3,13 @@
 Cubre F2: FAQ, agendar, folio, cancelar (libera el slot) y reagendar.
 
 Uso: python tests/smoke_test.py [http://127.0.0.1:8077] [codigo]
+
+GET /api/citas exige la variable de entorno ADMIN_TOKEN (la misma del servidor).
+Si el servidor no la tiene configurada, la ruta responde 503 y el script falla.
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 
@@ -13,6 +17,8 @@ import httpx
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8077"
 CODIGO = sys.argv[2] if len(sys.argv) > 2 else "ambar"
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+CABECERAS_ADMIN = {"X-Admin-Token": ADMIN_TOKEN}
 
 RE_FOLIO = re.compile(r"AMB-[0-9A-Z]{4}")
 
@@ -66,7 +72,7 @@ def main() -> int:
 
     print("\n== agendar ==")
     folio, slot = agendar("manicura", "Edgar")
-    assert c.get("/api/citas").json()["citas"], "la cita debe quedar en la base"
+    assert c.get("/api/citas", headers=CABECERAS_ADMIN).json()["citas"], "la cita debe quedar en la base"
 
     print("\n== no se puede repetir el mismo horario ==")
     enviar("agendar")
@@ -89,7 +95,7 @@ def main() -> int:
     print("\n== cancelar libera el slot ==")
     r = enviar("cancelar")
     assert "Cancelada" in r["respuestas"][0]["texto"]
-    citas = c.get("/api/citas").json()["citas"]
+    citas = c.get("/api/citas", headers=CABECERAS_ADMIN).json()["citas"]
     mia = next(x for x in citas if x["folio"] == folio)
     assert mia["estado"] == "cancelada", "la cita debe quedar cancelada"
 
@@ -100,7 +106,7 @@ def main() -> int:
     assert libres, "debe haber otro horario para mover"
     r = enviar(libres[0])
     assert "Movida" in r["respuestas"][0]["texto"], r["respuestas"][0]["texto"]
-    citas = c.get("/api/citas").json()["citas"]
+    citas = c.get("/api/citas", headers=CABECERAS_ADMIN).json()["citas"]
     movida = next(x for x in citas if x["folio"] == folio2)
     assert movida["slot"] == libres[0], "el slot debe haber cambiado"
     assert movida["estado"] == "confirmada"
@@ -110,7 +116,7 @@ def main() -> int:
     assert r["estado"]["handoff"] is True, "el botón humano debe registrar handoff"
 
     print("\n== citas finales ==")
-    for x in c.get("/api/citas").json()["citas"]:
+    for x in c.get("/api/citas", headers=CABECERAS_ADMIN).json()["citas"]:
         print(f"  {x['folio']} · {x['slot']} · {x['estado']} · {x['nombre']}")
     print("\nOK: flujo completo sin fallos")
     return 0
