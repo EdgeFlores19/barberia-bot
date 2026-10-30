@@ -150,6 +150,6 @@ No se migró a Postgres en esta fase: habría multiplicado el alcance y no habí
 - Entrega sin reintentos.
 - BD efímera en el plan free.
 
-**Siguiente paso:** fusionar el código con el canal apagado (sin `WA_*` en Render el webhook
-responde 503) y encenderlo solo cuando existan disco persistente, `SEED_DEMO=0` y aviso de
+**Siguiente paso:** fusionar el código con el canal apagado (sin `WA_*` en Render el `POST` del
+webhook responde 503 y el `GET` 403) y encenderlo solo cuando existan disco persistente, `SEED_DEMO=0` y aviso de
 privacidad.
