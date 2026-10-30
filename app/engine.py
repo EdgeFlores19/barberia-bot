@@ -252,7 +252,7 @@ async def manejar(
     # atajos con folio: "cancelar AMB-7K4Q", "mover AMB-7K4Q"
     folio_dicho = _folio_de(texto)
     if folio_dicho and _es_cancelar(txt):
-        return _cancelar_folio(s, folio_dicho, datos)
+        return await _cancelar_folio(s, folio_dicho, datos)
     if folio_dicho and _es_reagendar(txt):
         return _empezar_reagendar(s, folio_dicho, datos)
     if folio_dicho:
@@ -270,13 +270,13 @@ async def manejar(
     if s.paso == "agendar_slot":
         return _paso_slot(s, txt, texto, datos)
     if s.paso == "agendar_nombre":
-        return _paso_nombre(s, texto, datos)
+        return await _paso_nombre(s, texto, datos)
     if s.paso == "citas_folio":
         return _paso_citas_folio(s, texto, datos)
     if s.paso == "citas_accion":
-        return _paso_citas_accion(s, txt, texto, datos)
+        return await _paso_citas_accion(s, txt, texto, datos)
     if s.paso == "citas_slot":
-        return _paso_citas_slot(s, txt, texto, datos)
+        return await _paso_citas_slot(s, txt, texto, datos)
 
     s.paso = "inicio"
     return bienvenida(datos), s
@@ -357,7 +357,7 @@ def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     return [_t("Apartado. ¿A nombre de quién queda?")], s
 
 
-def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
+async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     nombre = texto.strip()[:60]
     if len(nombre) < 2:
         return [_t("Dame un nombre para la cita, por favor.")], s
@@ -379,7 +379,7 @@ def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
         return [_b("Justo alguien más tomó ese horario. Elige otro:",
                    [(i, _etiqueta_slot(i)) for i in libres[:8]])], s
 
-    event_id = calendar_sync.crear(cita, datos)
+    event_id = await asyncio.to_thread(calendar_sync.crear, cita, datos)
     if event_id:
         store.set_evento(cita["folio"], event_id)
 
@@ -428,9 +428,9 @@ def _paso_citas_folio(s: Sesion, texto: str, datos: dict[str, Any]):
                                        ("menu", "Nada, gracias")])], s
 
 
-def _paso_citas_accion(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
+async def _paso_citas_accion(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     if txt in {"cancelar", "cancela", "anular", "anula"} or _es_cancelar(txt):
-        return _cancelar_folio(s, s.folio or "", datos)
+        return await _cancelar_folio(s, s.folio or "", datos)
     if txt in {"reagendar", "mover", "cambiar"} or _es_reagendar(txt):
         return _empezar_reagendar(s, s.folio or "", datos)
     if txt in {"menu", "nada", "no"}:
@@ -441,7 +441,7 @@ def _paso_citas_accion(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
                                        ("menu", "Nada, gracias")])], s
 
 
-def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
+async def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
     cita = store.obtener(folio)
     if not _folio_autorizado(s, cita):
         cita = None            # a partir de aquí se comporta como "no existe"
@@ -458,7 +458,7 @@ def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
                    f"Si urge, marca al {datos['telefono']}.")], s
 
     cita = store.cancelar(folio)
-    calendar_sync.borrar(cita.get("calendar_event_id"))
+    await asyncio.to_thread(calendar_sync.borrar, cita.get("calendar_event_id"))
     store.set_evento(cita["folio"], None)
     s.folio = None
     s.paso = "fin"
@@ -497,7 +497,7 @@ def _empezar_reagendar(s: Sesion, folio: str, datos: dict[str, Any]):
                [("menu", "Mejor la dejo así")])], s
 
 
-def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
+async def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     folio = s.folio or ""
     cita = store.obtener(folio)
     if not cita or cita["estado"] == "cancelada":
@@ -529,7 +529,7 @@ def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
         s.paso = "inicio"
         return [_t("Esa cita ya no está activa."), _b("Menú:", MENU)], s
 
-    event_id = calendar_sync.mover(cita.get("calendar_event_id"), nueva, datos)
+    event_id = await asyncio.to_thread(calendar_sync.mover, cita.get("calendar_event_id"), nueva, datos)
     if event_id and event_id != cita.get("calendar_event_id"):
         store.set_evento(folio, event_id)
 

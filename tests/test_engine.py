@@ -5,6 +5,8 @@ Corre con: .venv/Scripts/python.exe -m pytest tests/test_engine.py -q
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -351,5 +353,63 @@ def test_en_humano_el_bot_calla_salvo_menu(datos, bd, monkeypatch):
 
     resp, _ = asyncio.run(engine.manejar("h4", "menu", datos, canal="wa", telefono=TEL_A))
     assert resp
+
+
+# ---------- Tarea 15: calendar_sync fuera del event loop ----------
+def _libres_con_margen(datos: dict, servicio_id: str = "manicura") -> list[str]:
+    reglas = datos["reglas_agenda"]
+    limite = reloj.ahora() + timedelta(hours=reglas["cancelacion_libre_hasta_horas"] + 1)
+    return [
+        s for s in engine.slots_disponibles(datos, servicio_id)
+        if datetime.fromisoformat(s) >= limite
+    ]
+
+
+async def _agendar_hasta_confirmar(sid: str, datos: dict, indice: int = 0) -> str:
+    """Agenda por el flujo normal usando el hueco `indice` de los libres.
+
+    C12: con índices distintos, dos conversaciones simultáneas no chocan por
+    SlotOcupado y el test de concurrencia mide de verdad el event loop.
+    """
+    libres = _libres_con_margen(datos)
+    assert len(libres) > indice, "hacen falta al menos dos huecos con margen"
+    slot = libres[indice]
+
+    await engine.manejar(sid, "agendar", datos)
+    await engine.manejar(sid, "manicura", datos)
+    await engine.manejar(sid, engine._etiqueta_slot(slot), datos)
+    resp, _ = await engine.manejar(sid, "Cliente Prueba", datos)
+    return resp[0]["texto"]
+
+
+def test_calendar_corre_en_otro_hilo(datos, monkeypatch):
+    hilos = []
+
+    def crear_lento(cita, datos):
+        hilos.append(threading.current_thread().name)
+        return None
+
+    monkeypatch.setattr(engine.calendar_sync, "crear", crear_lento)
+    asyncio.run(_agendar_hasta_confirmar("t1", datos))
+
+    assert hilos and hilos[0] != threading.main_thread().name
+
+
+def test_un_calendar_lento_no_bloquea_otra_conversacion(datos, monkeypatch):
+    def crear_lento(cita, datos):
+        time.sleep(0.3)
+        return None
+
+    monkeypatch.setattr(engine.calendar_sync, "crear", crear_lento)
+
+    async def dos_a_la_vez():
+        inicio = time.perf_counter()
+        await asyncio.gather(
+            _agendar_hasta_confirmar("a", datos, 0),
+            _agendar_hasta_confirmar("b", datos, 1),
+        )
+        return time.perf_counter() - inicio
+
+    assert asyncio.run(dos_a_la_vez()) < 0.5      # secuencial serían 0.6 s
 
 
