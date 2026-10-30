@@ -14,6 +14,7 @@ from typing import Any
 
 from . import calendar_sync, config, llm, reloj, store
 from . import slots as horarios
+from .telefono import t10 as _t10
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
@@ -369,9 +370,18 @@ def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
 
 
 # ---------- cancelar / reagendar ----------
+def _folio_autorizado(s: Sesion, cita: dict[str, Any] | None) -> bool:
+    """En WhatsApp el folio solo abre la cita del mismo teléfono."""
+    if s.canal != "wa" or not cita:
+        return True
+    return _t10(cita.get("telefono", "")) == _t10(s.telefono)
+
+
 def _paso_citas_folio(s: Sesion, texto: str, datos: dict[str, Any]):
     folio = _folio_de(texto) or (texto.strip().upper() if texto.strip() else "")
     cita = store.obtener(folio) if folio else None
+    if not _folio_autorizado(s, cita):
+        cita = None            # a partir de aquí se comporta como "no existe"
     if not cita:
         return [_t("No encuentro ninguna cita con ese folio. Revísalo en tu confirmación (tipo AMB-7K4Q).")], s
     if cita["estado"] == "cancelada":
@@ -406,6 +416,8 @@ def _paso_citas_accion(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
 
 def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
     cita = store.obtener(folio)
+    if not _folio_autorizado(s, cita):
+        cita = None            # a partir de aquí se comporta como "no existe"
     if not cita or cita["estado"] == "cancelada":
         s.paso = "inicio"
         return [_t("Ese folio no tiene una cita activa. ¿Te ayudo con otra cosa?"),
@@ -431,6 +443,8 @@ def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
 
 def _empezar_reagendar(s: Sesion, folio: str, datos: dict[str, Any]):
     cita = store.obtener(folio)
+    if not _folio_autorizado(s, cita):
+        cita = None            # a partir de aquí se comporta como "no existe"
     if not cita or cita["estado"] == "cancelada":
         s.paso = "inicio"
         return [_t("Ese folio no tiene una cita activa. ¿Te ayudo con otra cosa?"),

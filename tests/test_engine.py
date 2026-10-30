@@ -12,7 +12,7 @@ import pytest
 
 from app import config, engine, reloj, store
 
-from tests.telefonos import TEL_A
+from tests.telefonos import TEL_A, TEL_A_SIN_1, TEL_B
 
 CODIGO_SLOT = "%Y-%m-%dT%H:%M"
 
@@ -232,4 +232,43 @@ def test_purga_elimina_sesiones_viejas(datos, monkeypatch):
     asyncio.run(engine.manejar("nueva", "hola", datos))
 
     assert "vieja" not in engine.SESIONES
+
+
+# ---------- Tarea 13: el folio solo abre la cita del mismo teléfono ----------
+def _cita_ajena(datos: dict, telefono: str = TEL_B) -> dict:
+    """Cita en un horario real con margen de cancelación (C9: sin fecha fija)."""
+    slot = _primer_slot(datos)
+    return store.crear(slot=slot, servicio_id="manicura", nombre="Otro", telefono=telefono)
+
+
+def test_wa_no_cancela_cita_de_otro_telefono(datos):
+    cita = _cita_ajena(datos, TEL_B)
+
+    ajena, _ = asyncio.run(engine.manejar("w1", f"cancelar {cita['folio']}", datos,
+                                          canal="wa", telefono=TEL_A))
+    inexistente, _ = asyncio.run(engine.manejar("w2", "cancelar AMB-ZZZZ", datos,
+                                               canal="wa", telefono=TEL_A))
+
+    assert store.obtener(cita["folio"])["estado"] == "confirmada"
+    # Indistinguible de un folio inexistente: no se revela que la cita existe.
+    assert ajena == inexistente
+
+
+def test_wa_cancela_su_propia_cita_aunque_llegue_con_521(datos):
+    cita = _cita_ajena(datos, TEL_A)
+
+    resp, _ = asyncio.run(engine.manejar("w3", f"cancelar {cita['folio']}", datos,
+                                         canal="wa", telefono=TEL_A_SIN_1))
+
+    assert "Cancelada" in resp[0]["texto"]
+    assert store.obtener(cita["folio"])["estado"] == "cancelada"
+
+
+def test_web_sigue_cancelando_por_folio(datos):
+    cita = _cita_ajena(datos, telefono="")
+
+    asyncio.run(engine.manejar("web1", f"cancelar {cita['folio']}", datos))
+
+    assert store.obtener(cita["folio"])["estado"] == "cancelada"
+
 
