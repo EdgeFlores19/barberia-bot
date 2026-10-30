@@ -59,6 +59,12 @@ def test_firma_valida_rechaza_sin_secreto(monkeypatch):
     assert whatsapp_webhook.firma_valida(cuerpo, _firmar(cuerpo)) is False
 
 
+def test_firma_con_caracteres_no_ascii_es_invalida(monkeypatch):
+    monkeypatch.setattr(config, "WA_APP_SECRET", "s3cr3t")
+
+    assert whatsapp_webhook.firma_valida(b"{}", "sha256=ñandú") is False
+
+
 def test_extrae_mensaje_de_texto():
     msgs = whatsapp_webhook.extraer_mensajes(_payload("hola"))
     assert msgs == [{"id": "wamid.1", "wa_id": "5215500000001", "texto": "hola", "tipo": "text"}]
