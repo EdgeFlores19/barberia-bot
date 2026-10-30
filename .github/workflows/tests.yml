@@ -8,6 +8,8 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    env:
+      DEMO_CODE: ambar
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,4 +24,4 @@ jobs:
         run: |
           python -m uvicorn app.main:app --port 8077 --log-level warning &
           sleep 5
-          python tests/smoke_test.py http://127.0.0.1:8077 navajazo
+          python tests/smoke_test.py http://127.0.0.1:8077 "${DEMO_CODE}"
