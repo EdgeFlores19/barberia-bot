@@ -10,12 +10,13 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from typing import Any, Awaitable, Callable
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from . import config, engine, store, wa_cliente, whatsapp_formato
+from . import avisos, config, engine, store, wa_cliente, whatsapp_formato
 
 log = logging.getLogger(__name__)
 
@@ -104,9 +105,25 @@ async def procesar_evento(payload: dict[str, Any], enviar: Enviador | None = Non
     return atendidos
 
 
+_ULTIMA_ALERTA: float | None = None
+
+
+async def _alerta_envio_fallido() -> None:
+    """Como máximo una alerta por hora."""
+    global _ULTIMA_ALERTA
+    ahora = time.monotonic()
+    if _ULTIMA_ALERTA is not None and ahora - _ULTIMA_ALERTA < 3600:
+        return
+    _ULTIMA_ALERTA = ahora
+    await asyncio.to_thread(
+        avisos.notificar_alerta, "No pude enviar un mensaje de WhatsApp. Revisa WA_TOKEN (¿venció?)."
+    )
+
+
 async def _enviar(wa_id: str, respuestas: list[dict[str, Any]], enviar: Enviador) -> None:
     for payload in whatsapp_formato.a_payloads(respuestas):
-        await enviar(wa_id, payload)
+        if not await enviar(wa_id, payload):
+            await _alerta_envio_fallido()
 
 
 @router.get("/wa/webhook")

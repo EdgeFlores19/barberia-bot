@@ -165,6 +165,20 @@ def test_procesar_guarda_el_telefono_en_la_sesion(bd):
     assert engine.SESIONES["wa:5215500000001"].telefono == "5215500000001"
 
 
+def test_envio_fallido_avisa_una_sola_vez(bd, monkeypatch):
+    alertas = []
+    monkeypatch.setattr(whatsapp_webhook.avisos, "notificar_alerta", lambda texto: alertas.append(texto))
+    monkeypatch.setattr(whatsapp_webhook, "_ULTIMA_ALERTA", None)
+
+    async def falla(wa_id, payload):
+        return False
+
+    asyncio.run(whatsapp_webhook.procesar_evento(_payload("hola", "wamid.f1"), falla))
+    asyncio.run(whatsapp_webhook.procesar_evento(_payload("hola", "wamid.f2"), falla))
+
+    assert len(alertas) == 1
+
+
 def _cliente():
     from fastapi.testclient import TestClient
 
