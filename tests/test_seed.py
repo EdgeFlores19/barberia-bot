@@ -46,7 +46,7 @@ def test_no_siembra_dos_veces():
 
 
 def test_salta_al_dia_siguiente_si_el_objetivo_esta_cerrado():
-    # Martes 27 de octubre de 2026: +5 días cae domingo, que la barbería cierra.
+    # Martes 27 de octubre de 2026: +5 días cae domingo, que el estudio cierra.
     ahora = datetime(2026, 10, 27, 9, 0)
     assert seed.sembrar_si_vacio(DATOS, ahora=ahora) == 2
     dias = {cita["slot"][:10] for cita in store.listar()}

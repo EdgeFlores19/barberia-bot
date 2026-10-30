@@ -18,7 +18,7 @@ from . import slots as horarios
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 
-RE_FOLIO = re.compile(r"\bNVZ[-\s]?([0-9A-Z]{4})\b")
+RE_FOLIO = re.compile(r"\bAMB[-\s]?([0-9A-Z]{4})\b")
 RE_FOLIO_GEN = re.compile(r"\b([A-Z]{3}-[0-9A-Z]{4})\b")
 
 
@@ -69,14 +69,14 @@ MENU = [
     ("citas", "Mi cita"),
     ("precios", "Precios y servicios"),
     ("ubicacion", "Horario y ubicación"),
-    ("humano", "Hablar con el barbero"),
+    ("humano", "Hablar con la manicurista"),
 ]
 
-HANDOFF_PALABRAS = {"humano", "persona", "barbero", "asesor", "humana"}
+HANDOFF_PALABRAS = {"humano", "persona", "manicurista", "dueña", "estilista", "humana"}
 
 
 def _es_handoff(txt: str) -> bool:
-    """'humano', 'quiero hablar con una persona', 'pásame al barbero'..."""
+    """'humano', 'quiero hablar con una persona', 'pásame a la manicurista'..."""
     palabras = set(txt.split())
     return bool(palabras & HANDOFF_PALABRAS) or "hablar con" in txt
 
@@ -90,9 +90,9 @@ def _es_reagendar(txt: str) -> bool:
 
 
 def _folio_de(texto: str) -> str | None:
-    """Acepta 'NVZ-7K4Q', 'nvz 7k4q' o el folio suelto dentro de una frase.
+    """Acepta 'AMB-7K4Q', 'amb 7k4q' o el folio suelto dentro de una frase.
 
-    El prefijo NVZ se busca primero porque un patrón genérico de 3 letras + 4
+    El prefijo AMB se busca primero porque un patrón genérico de 3 letras + 4
     caracteres también hace match con palabras normales ('CAN-CELA').
     """
     alto = texto.upper()
@@ -190,11 +190,11 @@ async def manejar(sid: str, texto: str, datos: dict[str, Any]) -> tuple[list[dic
     if _es_handoff(txt):
         s.handoff = True
         s.paso = "humano"
-        return [_t("Listo, le paso tu conversación al barbero y te contesta en cuanto salga del sillón. "
+        return [_t("Listo, le paso tu conversación a la manicurista y te contesta en cuanto termine con su clienta. "
                    f"Si urge, marca al {datos['telefono']}."),
                 _b("¿Algo más mientras?", MENU)], s
 
-    # atajos con folio: "cancelar NVZ-7K4Q", "mover NVZ-7K4Q"
+    # atajos con folio: "cancelar AMB-7K4Q", "mover AMB-7K4Q"
     folio_dicho = _folio_de(texto)
     if folio_dicho and _es_cancelar(txt):
         return _cancelar_folio(s, folio_dicho, datos)
@@ -232,7 +232,7 @@ async def _paso_inicio(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
         return _ofrecer_servicios(s, datos)
     if txt in {"citas", "2", "mi cita", "cancelar", "reagendar", "mover"}:
         s.paso = "citas_folio"
-        return [_t("Claro. ¿Me pasas el folio de tu cita? Viene en la confirmación, tipo NVZ-7K4Q.")], s
+        return [_t("Claro. ¿Me pasas el folio de tu cita? Viene en la confirmación, tipo AMB-7K4Q.")], s
     if txt in {"precios", "3", "servicios", "cuanto"}:
         s.resuelta = True
         lineas = "\n".join(f"• {x['nombre']} — ${x['precio']} ({x['minutos']} min)" for x in datos["servicios"])
@@ -247,7 +247,7 @@ async def _paso_inicio(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     if txt in {"5"}:
         s.handoff = True
         s.paso = "humano"
-        return [_t(f"Listo, le paso tu conversación al barbero. Si urge, marca al {datos['telefono']}."),
+        return [_t(f"Listo, le paso tu conversación a la manicurista. Si urge, marca al {datos['telefono']}."),
                 _b("¿Algo más mientras?", MENU)], s
 
     # texto libre → LLM anclado
@@ -282,10 +282,10 @@ def _paso_servicio(s: Sesion, txt: str, datos: dict[str, Any]):
     if not libres:
         s.paso = "inicio"
         s.handoff = True
-        return [_t("No me quedan huecos en los próximos 7 días. Te paso con el barbero para ver si abre un espacio.")], s
+        return [_t("No me quedan huecos en los próximos 7 días. Te paso con la manicurista para ver si abre un espacio.")], s
     sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0, "minutos": 30}
     return [_b(f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min).\n¿Qué día te queda bien?",
-               [(i, _etiqueta_slot(i)) for i in libres[:8]] + [("humano", "Otra fecha / hablar con el barbero")])], s
+               [(i, _etiqueta_slot(i)) for i in libres[:8]] + [("humano", "Otra fecha / hablar con la manicurista")])], s
 
 
 def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
@@ -346,7 +346,7 @@ def _paso_citas_folio(s: Sesion, texto: str, datos: dict[str, Any]):
     folio = _folio_de(texto) or (texto.strip().upper() if texto.strip() else "")
     cita = store.obtener(folio) if folio else None
     if not cita:
-        return [_t("No encuentro ninguna cita con ese folio. Revísalo en tu confirmación (tipo NVZ-7K4Q).")], s
+        return [_t("No encuentro ninguna cita con ese folio. Revísalo en tu confirmación (tipo AMB-7K4Q).")], s
     if cita["estado"] == "cancelada":
         s.paso = "inicio"
         return [_t(f"La cita {cita['folio']} ya está cancelada. Si quieres, agendamos otra."),
@@ -357,7 +357,7 @@ def _paso_citas_folio(s: Sesion, texto: str, datos: dict[str, Any]):
     s.paso = "citas_accion"
     aviso = ""
     if _fuera_de_ventana(cita, datos):
-        aviso = "\n\nOjo: falta menos de 2 h, así que el cambio lo confirma el barbero."
+        aviso = "\n\nOjo: falta menos de 2 h, así que el cambio lo confirma la manicurista."
     return [_t(f"Encontré tu cita.\n\n{_resumen_cita(cita, datos)}{aviso}"),
             _b("¿Qué quieres hacer?", [("reagendar", "Mover a otro horario"),
                                        ("cancelar", "Cancelar la cita"),
@@ -387,7 +387,7 @@ def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
         s.handoff = True
         s.paso = "humano"
         return [_t(f"Falta menos de {datos['reglas_agenda']['cancelacion_libre_hasta_horas']} h para tu cita "
-                   f"del {_etiqueta_slot(cita['slot'])}, así que la cancelación la cierra el barbero. "
+                   f"del {_etiqueta_slot(cita['slot'])}, así que la cancelación la cierra la manicurista. "
                    "Ya le pasé tu conversación. "
                    f"Si urge, marca al {datos['telefono']}.")], s
 
@@ -412,7 +412,7 @@ def _empezar_reagendar(s: Sesion, folio: str, datos: dict[str, Any]):
         s.handoff = True
         s.paso = "humano"
         return [_t(f"Falta menos de {datos['reglas_agenda']['cancelacion_libre_hasta_horas']} h para tu cita, "
-                   "así que el cambio lo ve el barbero. Ya le pasé tu conversación. "
+                   "así que el cambio lo ve la manicurista. Ya le pasé tu conversación. "
                    f"Si urge, marca al {datos['telefono']}.")], s
 
     s.folio = cita["folio"]
@@ -422,7 +422,7 @@ def _empezar_reagendar(s: Sesion, folio: str, datos: dict[str, Any]):
     if not libres:
         s.paso = "inicio"
         s.handoff = True
-        return [_t("No hay otros huecos en los próximos 7 días. Te paso con el barbero para moverlo.")], s
+        return [_t("No hay otros huecos en los próximos 7 días. Te paso con la manicurista para moverlo.")], s
     s.paso = "citas_slot"
     return [_b(f"Tu cita es {_etiqueta_slot(cita['slot'])}.\n¿A qué horario la movemos?",
                [(i, _etiqueta_slot(i)) for i in libres[:8]] +

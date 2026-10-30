@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from . import config, engine, seed, store
 
-app = FastAPI(title="Barbería El Navajazo — bot demo")
+app = FastAPI(title="Estudio de Uñas Ámbar — bot demo")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 
 DATOS = engine.cargar_datos()

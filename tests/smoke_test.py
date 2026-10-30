@@ -12,9 +12,9 @@ import sys
 import httpx
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8077"
-CODIGO = sys.argv[2] if len(sys.argv) > 2 else "navajazo"
+CODIGO = sys.argv[2] if len(sys.argv) > 2 else "ambar"
 
-RE_FOLIO = re.compile(r"NVZ-[0-9A-Z]{4}")
+RE_FOLIO = re.compile(r"AMB-[0-9A-Z]{4}")
 
 
 def mostrar(r: httpx.Response) -> list[dict]:
@@ -65,18 +65,18 @@ def main() -> int:
     enviar("hola")
 
     print("\n== agendar ==")
-    folio, slot = agendar("corte", "Edgar")
+    folio, slot = agendar("manicura", "Edgar")
     assert c.get("/api/citas").json()["citas"], "la cita debe quedar en la base"
 
     print("\n== no se puede repetir el mismo horario ==")
     enviar("agendar")
-    r = enviar("corte")
+    r = enviar("manicura")
     ids = [o["id"] for o in r["respuestas"][0]["opciones"]]
     assert slot not in ids, f"el slot {slot} ya está ocupado y no debe ofrecerse"
     enviar("menu")
 
     print("\n== FAQ ==")
-    enviar("¿cuánto cuesta el corte con barba?")
+    enviar("¿cuánto cuesta la manicura con gelish?")
     enviar("¿abren el domingo?")
     enviar("¿tienen estacionamiento?")
 
@@ -94,7 +94,7 @@ def main() -> int:
     assert mia["estado"] == "cancelada", "la cita debe quedar cancelada"
 
     print("\n== reagendar ==")
-    folio2, slot2 = agendar("corte", "Edgar", slot)
+    folio2, slot2 = agendar("manicura", "Edgar", slot)
     r = enviar(f"mover {folio2}")
     libres = [o["id"] for o in r["respuestas"][0]["opciones"] if o["id"] != "menu"]
     assert libres, "debe haber otro horario para mover"

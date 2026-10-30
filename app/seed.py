@@ -16,12 +16,12 @@ from typing import Any
 from . import slots as horarios
 from . import store
 
-log = logging.getLogger("navajazo.seed")
+log = logging.getLogger("ambar.seed")
 
 # (servicio_id, días de anticipación, nombre, teléfono)
 PLAN = [
-    ("corte_barba", 3, "Luis Ramírez", "55 8899 1020"),
-    ("barba", 5, "Ana Beltrán", "55 3312 7788"),
+    ("manicura_pedicura", 3, "Luis Ramírez", "449 118 2043"),
+    ("gelish", 5, "Ana Beltrán", "449 205 7712"),
 ]
 
 
@@ -53,7 +53,7 @@ def sembrar_si_vacio(datos: dict[str, Any], ahora: datetime | None = None) -> in
 
 
 def _primer_hueco(libres: list[str], ahora: datetime, dias: int) -> str | None:
-    """Hueco del día pedido o del siguiente que abra (el domingo la barbería cierra)."""
+    """Hueco del día pedido o del siguiente que abra (el domingo el estudio cierra)."""
     for salto in range(dias, dias + 8):
         objetivo = (ahora + timedelta(days=salto)).date().isoformat()
         del_dia = [s for s in libres if s.startswith(objetivo)]

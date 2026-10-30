@@ -14,7 +14,7 @@ DB_FILE = Path(os.getenv("DB_FILE", str(BASE_DIR / "barberia.db")))
 SEED_DEMO = os.getenv("SEED_DEMO", "1").strip().lower() not in {"0", "false", "no", ""}
 
 # Acceso a la demo
-DEMO_CODE = os.getenv("DEMO_CODE", "navajazo")
+DEMO_CODE = os.getenv("DEMO_CODE", "ambar")
 
 # Presupuesto duro (capa 2 del esquema de acceso)
 MAX_MENSAJES_POR_SESION = int(os.getenv("MAX_MENSAJES_POR_SESION", "40"))

@@ -1,12 +1,18 @@
 {
-  "nombre": "Barbería El Navajazo",
-  "slogan": "Corte clásico, filo moderno",
-  "direccion": "Av. Reforma 245, Col. Centro, CDMX",
-  "telefono": "55 1234 5678",
-  "instagram": "@elnavajazo.mx",
+  "nombre": "Estudio de Uñas Ámbar",
+  "slogan": "Manos cuidadas, color a tu medida",
+  "direccion": "Av. Francisco I. Madero 328, Col. Centro, Aguascalientes, Ags., C.P. 20000",
+  "telefono": "449 123 4567",
+  "instagram": "@ambar.unas.ags",
   "horario": {
-    "lunes_viernes": { "abre": "10:00", "cierra": "20:00" },
-    "sabado": { "abre": "10:00", "cierra": "18:00" },
+    "lunes_viernes": {
+      "abre": "10:00",
+      "cierra": "20:00"
+    },
+    "sabado": {
+      "abre": "10:00",
+      "cierra": "18:00"
+    },
     "domingo": null
   },
   "reglas_agenda": {
@@ -16,54 +22,161 @@
     "cancelacion_libre_hasta_horas": 2
   },
   "servicios": [
-    { "id": "corte", "nombre": "Corte clásico", "precio": 180, "minutos": 30, "descripcion": "Máquina, tijera y acabado a navaja en cuello." },
-    { "id": "corte_barba", "nombre": "Corte + barba", "precio": 280, "minutos": 60, "descripcion": "Corte completo y perfilado de barba con toalla caliente." },
-    { "id": "barba", "nombre": "Arreglo de barba", "precio": 130, "minutos": 30, "descripcion": "Perfilado, rebaje y aceite." },
-    { "id": "nino", "nombre": "Corte niño (menores de 12)", "precio": 150, "minutos": 30, "descripcion": "Corte con paciencia extra y sin prisa." },
-    { "id": "afeitado", "nombre": "Afeitado a navaja", "precio": 200, "minutos": 30, "descripcion": "Afeitado tradicional con toalla caliente y bálsamo." }
-  ],
-  "metodos_pago": ["Efectivo", "Transferencia", "Tarjeta (terminal Clip)"],
-  "faq": [
     {
-      "tags": ["precio", "precios", "cuanto", "cuesta", "cobran", "tarifa", "costo"],
-      "respuesta": "Corte clásico $180 · Corte + barba $280 · Arreglo de barba $130 · Corte niño $150 · Afeitado a navaja $200. Todos incluyen lavado y peinado."
+      "id": "manicura",
+      "nombre": "Manicura rusa",
+      "precio": 250,
+      "minutos": 30,
+      "descripcion": "Cutícula limpia, forma almendrada y esmalte de larga duración."
     },
     {
-      "tags": ["horario", "abren", "cierran", "abierto", "domingo", "sabado"],
+      "id": "manicura_pedicura",
+      "nombre": "Manicura + pedicura",
+      "precio": 450,
+      "minutos": 60,
+      "descripcion": "Las dos en la misma visita, con exfoliación y masaje con crema tibia."
+    },
+    {
+      "id": "gelish",
+      "nombre": "Gelish",
+      "precio": 300,
+      "minutos": 30,
+      "descripcion": "Esmalte en gel curado en lámpara; tres semanas sin descarapelar."
+    },
+    {
+      "id": "ninas",
+      "nombre": "Manicura para niñas (menores de 12)",
+      "precio": 180,
+      "minutos": 30,
+      "descripcion": "Con diseño y paciencia extra; sin productos fuertes."
+    },
+    {
+      "id": "pedicura",
+      "nombre": "Pedicura express",
+      "precio": 320,
+      "minutos": 30,
+      "descripcion": "Remojo, cutícula, exfoliación y esmalte a elegir."
+    }
+  ],
+  "metodos_pago": [
+    "Efectivo",
+    "Transferencia",
+    "Tarjeta (terminal Clip)"
+  ],
+  "faq": [
+    {
+      "tags": [
+        "precio",
+        "precios",
+        "cuanto",
+        "cuesta",
+        "cobran",
+        "tarifa",
+        "costo"
+      ],
+      "respuesta": "Manicura rusa $250 · Manicura + pedicura $450 · Gelish $300 · Manicura para niñas $180 · Pedicura express $320. Todos incluyen limpieza de cutícula y crema."
+    },
+    {
+      "tags": [
+        "horario",
+        "abren",
+        "cierran",
+        "abierto",
+        "domingo",
+        "sabado"
+      ],
       "respuesta": "Lunes a viernes de 10:00 a 20:00, sábado de 10:00 a 18:00. Domingo cerrado."
     },
     {
-      "tags": ["donde", "ubicacion", "direccion", "llegar", "sucursal", "mapa"],
-      "respuesta": "Estamos en Av. Reforma 245, Col. Centro, CDMX. A dos calles del metro Hidalgo, junto a la farmacia."
+      "tags": [
+        "donde",
+        "ubicacion",
+        "direccion",
+        "llegar",
+        "sucursal",
+        "mapa"
+      ],
+      "respuesta": "Estamos en Av. Francisco I. Madero 328, Col. Centro, Aguascalientes, Ags., C.P. 20000. A tres calles de la Plaza de Armas, frente al jardín."
     },
     {
-      "tags": ["pago", "pagar", "tarjeta", "efectivo", "transferencia", "terminal"],
+      "tags": [
+        "pago",
+        "pagar",
+        "tarjeta",
+        "efectivo",
+        "transferencia",
+        "terminal"
+      ],
       "respuesta": "Aceptamos efectivo, transferencia y tarjeta con terminal Clip."
     },
     {
-      "tags": ["estacionamiento", "estacionar", "coche", "carro", "parking"],
-      "respuesta": "Hay estacionamiento público a media cuadra, sobre Reforma; cobran $40 la hora."
+      "tags": [
+        "estacionamiento",
+        "estacionar",
+        "coche",
+        "carro",
+        "parking"
+      ],
+      "respuesta": "Hay estacionamiento público a media cuadra, sobre Madero; cobran $20 la hora."
     },
     {
-      "tags": ["cita", "reservar", "turno", "agendar", "disponibilidad", "llegar sin cita", "walkin"],
+      "tags": [
+        "cita",
+        "reservar",
+        "turno",
+        "agendar",
+        "disponibilidad",
+        "llegar sin cita",
+        "walkin"
+      ],
       "respuesta": "Puedes llegar sin cita y esperar turno, pero los jueves y viernes por la tarde se llena. Si agendas aquí, tu lugar queda apartado."
     },
     {
-      "tags": ["cancelar", "cancelacion", "reagendar", "cambiar", "mover"],
+      "tags": [
+        "cancelar",
+        "cancelacion",
+        "reagendar",
+        "cambiar",
+        "mover"
+      ],
       "respuesta": "Puedes cancelar o mover tu cita sin costo hasta 2 horas antes. Después de eso se cobra el 50%."
     },
     {
-      "tags": ["nino", "niño", "niños", "menor", "hijo"],
-      "respuesta": "Sí, cortamos a menores de 12 por $150 y sin prisa. Si es la primera vez del niño, avísame y le damos más tiempo."
+      "tags": [
+        "nino",
+        "niño",
+        "niños",
+        "nina",
+        "niña",
+        "niñas",
+        "menor",
+        "hijo"
+      ],
+      "respuesta": "Sí, atendemos a niñas menores de 12 por $180 y sin prisa. Si es su primera vez, avísame y le damos más tiempo."
     },
     {
-      "tags": ["duracion", "cuanto tarda", "tarda", "tiempo"],
-      "respuesta": "Un corte son 30 minutos; corte con barba, una hora. Llega 5 minutos antes y salimos a tiempo."
+      "tags": [
+        "duracion",
+        "cuanto tarda",
+        "tarda",
+        "tiempo"
+      ],
+      "respuesta": "Una manicura son 30 minutos; manicura con pedicura, una hora. Llega 5 minutos antes y salimos a tiempo."
     },
     {
-      "tags": ["barba", "afeitado", "navaja", "toalla"],
-      "respuesta": "El arreglo de barba incluye perfilado con navaja, toalla caliente y aceite: $130. El afeitado completo a navaja son $200."
+      "tags": [
+        "gelish",
+        "gel",
+        "acrilico",
+        "acrílico",
+        "diseno",
+        "diseño",
+        "arte",
+        "unas",
+        "uñas"
+      ],
+      "respuesta": "El gelish cuesta $300 y dura unas tres semanas. Los diseños sencillos van incluidos; el arte con pedrería se cotiza al llegar."
     }
   ],
-  "fallback": "No quiero inventarte datos. Puedo ayudarte con precios, horario, ubicación, formas de pago o agendar tu cita — o te paso con el barbero."
+  "fallback": "No quiero inventarte datos. Puedo ayudarte con precios, horario, ubicación, formas de pago o agendar tu cita — o te paso con la manicurista."
 }

@@ -1,7 +1,7 @@
 """Espejo opcional en Google Calendar. Nunca bloquea una reserva.
 
 Si falta GOOGLE_CALENDAR_ID, el token o la red, el bot agenda igual: SQLite es
-la fuente de verdad y Calendar es solo una copia para que el barbero lo vea en
+la fuente de verdad y Calendar es solo una copia para que la manicurista lo vea en
 su teléfono. Se usa REST directo (httpx) para no arrastrar google-api-python-client.
 
 Variables: GOOGLE_TOKEN_JSON, GOOGLE_CALENDAR_ID, CALENDAR_TZ.
@@ -18,7 +18,7 @@ import httpx
 
 from . import config
 
-log = logging.getLogger("barberia.calendar")
+log = logging.getLogger("ambar.calendar")
 
 _TOKEN: dict[str, Any] = {"access": "", "expira": 0.0}
 

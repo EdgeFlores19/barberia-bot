@@ -15,7 +15,7 @@ from . import config
 
 # Sin caracteres que se confundan al dictarlos por teléfono (0/O, 1/I/L).
 ALFABETO_FOLIO = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
-PREFIJO_FOLIO = "NVZ"
+PREFIJO_FOLIO = "AMB"
 
 _candado = threading.Lock()
 _inicializada = False

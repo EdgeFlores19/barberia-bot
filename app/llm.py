@@ -57,10 +57,10 @@ async def responder(pregunta: str, datos: dict[str, Any]) -> dict[str, Any]:
         return {"texto": local or datos["fallback"], "fuente": "reglas" if local else "fallback"}
 
     sistema = (
-        "Eres el asistente de una barbería por WhatsApp. Responde en español mexicano, "
+        "Eres el asistente de un estudio de uñas en Aguascalientes por WhatsApp. Responde en español mexicano, "
         "máximo 3 líneas, tono cercano y directo, sin emojis de más.\n"
         "Reglas: usa SOLO los datos del contexto. Si falta el dato, di que lo confirmas "
-        "con el barbero; nunca inventes precios, horarios ni disponibilidad. "
+        "con la manicurista; nunca inventes precios, horarios ni disponibilidad. "
         "No prometas descuentos ni servicios que no estén en la lista.\n\n"
         f"CONTEXTO:\n{_contexto(datos)}"
     )

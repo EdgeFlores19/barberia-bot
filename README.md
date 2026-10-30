@@ -1,15 +1,18 @@
-# Barbería El Navajazo — bot de WhatsApp (demo)
+# Estudio de Uñas Ámbar — bot de WhatsApp (demo)
 
 [![tests](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml)
 
-**Demo en vivo:** <https://navajazo-bot.onrender.com> · código de acceso `navajazo`
+**Demo en vivo:** <https://navajazo-bot.onrender.com> · código de acceso `ambar`
 *(plan free: si estuvo dormida, la primera carga tarda ~50 s)*
 
-Asistente conversacional para una barbería: responde preguntas frecuentes, agenda citas
+Asistente conversacional para un estudio de uñas en Aguascalientes: responde preguntas frecuentes, agenda citas
 y pasa la conversación a una persona cuando hace falta. Es un **proyecto muestra**: no está
 conectado a un número real de WhatsApp, se usa desde un chat web con la estética de WhatsApp.
 
-> Barbería ficticia. Todos los datos viven en `data/barberia.json` y se editan sin tocar código.
+> **Negocio ficticio.** Nombre, dirección (Av. Francisco I. Madero 328, Col. Centro, Aguascalientes),
+> teléfono, precios y servicios son inventados. Todos los datos viven en `data/barberia.json` y se
+> editan sin tocar código. El nombre técnico del repo y de los archivos (`barberia-bot`,
+> `barberia.json`, `barberia.db`) se conserva a propósito para no romper rutas, CI ni el servicio en Render.
 
 ![Flujo completo: menú, precios, agendar y folio](docs/capturas/demo.gif)
 
@@ -19,9 +22,9 @@ conectado a un número real de WhatsApp, se usa desde un chat web con la estéti
 - **Agendar**: servicio → día/hora → nombre → confirmación. Slots de 30 min, hasta 7 días
   adelante, mínimo 1 hora de anticipación, sin dobles reservas.
 - **Cancelar / reagendar** con el folio de la cita, libre hasta 2 h antes.
-- **Hablar con el barbero**: handoff y se registra en la conversación.
+- **Hablar con la manicurista**: handoff y se registra en la conversación.
 
-Cada cita confirmada recibe un **folio** legible por teléfono (`NVZ-7K4Q`, sin `0/O` ni `1/I/L`).
+Cada cita confirmada recibe un **folio** legible por teléfono (`AMB-7K4Q`, sin `0/O` ni `1/I/L`).
 Es la llave para ver, mover o cancelar la cita: en v1 no hay login.
 
 ## Capturas
@@ -43,7 +46,7 @@ Es la llave para ver, mover o cancelar la cita: en v1 no hay login.
   anota en el log. Calendar no sabe de dobles reservas, así que nunca se usa para decidir
   disponibilidad.
 
-Fuera de v1 a propósito: pagos, promociones, lealtad, multi-sucursal, multi-barbero,
+Fuera de v1 a propósito: pagos, promociones, lealtad, multi-sucursal, multi-estilista,
 recordatorios salientes 24 h antes y penalizaciones por cancelar.
 
 ## Cómo funciona el cerebro
@@ -53,7 +56,7 @@ Híbrido, con el LLM en un carril estrecho:
 | Camino | Quién decide |
 |---|---|
 | Elegir servicio, día y hora | Botones y reglas deterministas (el LLM nunca inventa un horario) |
-| FAQ y texto libre | DeepSeek redacta, **anclado** al JSON de la barbería |
+| FAQ y texto libre | DeepSeek redacta, **anclado** al JSON del negocio |
 | Sin `DEEPSEEK_API_KEY` o si la API falla | Matching local por tags; el bot sigue respondiendo |
 
 ## Arrancar en local
@@ -65,7 +68,7 @@ cp .env.example .env                               # opcional: clave DeepSeek
 .venv/Scripts/python -m uvicorn app.main:app --reload --port 8077
 ```
 
-Abre <http://127.0.0.1:8077> y usa el código de acceso `navajazo` (configurable en `DEMO_CODE`).
+Abre <http://127.0.0.1:8077> y usa el código de acceso `ambar` (configurable en `DEMO_CODE`).
 La primera vez siembra dos citas de ejemplo (`SEED_DEMO=0` lo desactiva).
 
 ### Pruebas

@@ -37,13 +37,13 @@ def _enviar(sid: str, texto: str, datos: dict):
     return asyncio.run(engine.manejar(sid, texto, datos))
 
 
-def _primer_slot(datos: dict, servicio_id: str = "corte") -> str:
+def _primer_slot(datos: dict, servicio_id: str = "manicura") -> str:
     libres = engine.slots_disponibles(datos, servicio_id)
     assert libres, "debería haber disponibilidad en los próximos 7 días"
     return libres[0]
 
 
-def _agendar(datos: dict, sid: str = "s1", servicio_id: str = "corte", nombre: str = "Edgar Flores") -> str:
+def _agendar(datos: dict, sid: str = "s1", servicio_id: str = "manicura", nombre: str = "Edgar Flores") -> str:
     """Flujo completo por botones. Devuelve el folio."""
     _enviar(sid, "agendar", datos)
     _enviar(sid, servicio_id, datos)
@@ -54,7 +54,7 @@ def _agendar(datos: dict, sid: str = "s1", servicio_id: str = "corte", nombre: s
     texto = resp[0]["texto"]
     assert "folio" in texto.lower(), texto
     folio = texto.split("Tu folio es ")[1].split(".")[0].strip()
-    assert folio.startswith("NVZ-")
+    assert folio.startswith("AMB-")
     return folio
 
 
@@ -80,7 +80,7 @@ def test_folio_es_unico_y_sobrevive_a_nueva_sesion(datos):
 def test_cancelar_libera_el_slot(datos):
     folio = _agendar(datos)
     slot = store.obtener(folio)["slot"]
-    assert slot not in engine.slots_disponibles(datos, "corte")
+    assert slot not in engine.slots_disponibles(datos, "manicura")
 
     resp, _ = _enviar("s1", "menu", datos)
     resp, _ = _enviar("s1", "citas", datos)
@@ -90,7 +90,7 @@ def test_cancelar_libera_el_slot(datos):
     resp, _ = _enviar("s1", "cancelar", datos)
     assert "Cancelada" in resp[0]["texto"]
     assert store.obtener(folio)["estado"] == "cancelada"
-    assert slot in engine.slots_disponibles(datos, "corte")
+    assert slot in engine.slots_disponibles(datos, "manicura")
 
 
 def test_cancelar_con_folio_en_una_frase(datos):
@@ -102,14 +102,14 @@ def test_cancelar_con_folio_en_una_frase(datos):
 
 def test_folio_inexistente_no_rompe(datos):
     resp, _ = _enviar("s1", "citas", datos)
-    resp, _ = _enviar("s1", "NVZ-ZZZZ", datos)
+    resp, _ = _enviar("s1", "AMB-ZZZZ", datos)
     assert "No encuentro" in resp[0]["texto"]
 
 
 def test_reagendar_mueve_y_libera_el_anterior(datos):
     folio = _agendar(datos)
     viejo = store.obtener(folio)["slot"]
-    libres = [x for x in engine.slots_disponibles(datos, "corte", excluir_folio=folio) if x != viejo]
+    libres = [x for x in engine.slots_disponibles(datos, "manicura", excluir_folio=folio) if x != viejo]
     assert libres, "debe haber otro hueco para mover"
     nuevo = libres[0]
 
@@ -129,23 +129,23 @@ def test_no_se_puede_reservar_dos_veces_el_mismo_slot(datos):
     folio = _agendar(datos, sid="s1")
     slot = store.obtener(folio)["slot"]
     with pytest.raises(store.SlotOcupado):
-        store.crear(slot, "corte", "Otra Persona")
+        store.crear(slot, "manicura", "Otra Persona")
 
 
 def test_slot_ocupado_desaparece_de_las_opciones(datos):
     _agendar(datos, sid="s1")
     engine.SESIONES.clear()
     _enviar("s2", "agendar", datos)
-    resp, _ = _enviar("s2", "corte", datos)
+    resp, _ = _enviar("s2", "manicura", datos)
     ids = [o["id"] for o in resp[0]["opciones"]]
     ocupado = next(iter(store.ocupados()))
     assert ocupado not in ids
 
 
-def test_reagendar_tarde_pide_al_barbero(datos):
+def test_reagendar_tarde_pide_a_la_manicurista(datos):
     """Menos de 2 h antes: no cancela sola, hace handoff."""
     inicio = datetime.now() + timedelta(minutes=45)
-    cita = store.crear(inicio.strftime(CODIGO_SLOT), "corte", "Tarde")
+    cita = store.crear(inicio.strftime(CODIGO_SLOT), "manicura", "Tarde")
     resp, sesion = _enviar("s1", f"cancelar {cita['folio']}", datos)
     assert sesion.handoff is True
     assert store.obtener(cita["folio"])["estado"] == "confirmada"
@@ -155,7 +155,7 @@ def test_reagendar_acepta_el_id_del_boton(datos):
     """El botón manda el id ISO ('2026-10-27T10:30'), no la etiqueta legible."""
     folio = _agendar(datos)
     viejo = store.obtener(folio)["slot"]
-    nuevo = next(x for x in engine.slots_disponibles(datos, "corte", excluir_folio=folio) if x != viejo)
+    nuevo = next(x for x in engine.slots_disponibles(datos, "manicura", excluir_folio=folio) if x != viejo)
     resp, _ = _enviar("s1", f"mover {folio}", datos)
     ids = [o["id"] for o in resp[0]["opciones"]]
     assert nuevo in ids
