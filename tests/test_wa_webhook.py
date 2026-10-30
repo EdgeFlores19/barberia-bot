@@ -190,6 +190,19 @@ def test_webhook_get_rechaza_token_incorrecto(bd, monkeypatch):
     assert r.status_code == 403
 
 
+def test_webhook_get_con_token_no_ascii_devuelve_403(bd, monkeypatch):
+    monkeypatch.setattr(config, "WA_MODO", "consola")
+    monkeypatch.setattr(config, "WA_VERIFY_TOKEN", "prueba")
+    monkeypatch.setattr(config, "WA_APP_SECRET", "s3cr3t")
+
+    r = _cliente().get(
+        "/wa/webhook",
+        params={"hub.mode": "subscribe", "hub.verify_token": "ñandú", "hub.challenge": "x"},
+    )
+
+    assert r.status_code == 403
+
+
 def test_webhook_post_sin_firma_devuelve_403(bd, monkeypatch):
     monkeypatch.setattr(config, "WA_MODO", "consola")
     monkeypatch.setattr(config, "WA_VERIFY_TOKEN", "prueba")
