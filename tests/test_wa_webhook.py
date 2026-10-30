@@ -1,6 +1,7 @@
 """Tests del webhook: firma, extracción de mensajes y procesamiento."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -104,3 +105,61 @@ def test_mensaje_de_imagen_llega_con_texto_vacio():
     msgs = whatsapp_webhook.extraer_mensajes(p)
     assert msgs[0]["tipo"] == "image"
     assert msgs[0]["texto"] == ""
+
+
+class _Enviador:
+    def __init__(self):
+        self.salida: list[tuple[str, dict]] = []
+
+    async def __call__(self, wa_id: str, payload: dict) -> bool:
+        self.salida.append((wa_id, payload))
+        return True
+
+
+def _cuerpo(wa_id: str, payload: dict) -> str:
+    if payload["type"] == "text":
+        return payload["text"]["body"]
+    return json.dumps(payload["interactive"], ensure_ascii=False)
+
+
+def test_procesar_responde_faq_y_manda_al_telefono(bd):
+    enviador = _Enviador()
+    n = asyncio.run(whatsapp_webhook.procesar_evento(_payload("precios"), enviador))
+    assert n == 1
+    wa_id, payload = enviador.salida[0]
+    assert wa_id == "5215500000001"
+    assert "450" in _cuerpo(wa_id, payload)
+
+
+def test_procesar_usa_una_sesion_por_telefono(bd):
+    enviador = _Enviador()
+    asyncio.run(whatsapp_webhook.procesar_evento(_payload("hola", "wamid.a"), enviador))
+    asyncio.run(whatsapp_webhook.procesar_evento(_payload("precios", "wamid.b"), enviador))
+    assert list(engine.SESIONES) == ["wa:5215500000001"]
+
+
+def test_procesar_ignora_el_mensaje_repetido(bd):
+    enviador = _Enviador()
+    primero = asyncio.run(whatsapp_webhook.procesar_evento(_payload("precios", "wamid.x"), enviador))
+    enviados_tras_el_primero = len(enviador.salida)
+    segundo = asyncio.run(whatsapp_webhook.procesar_evento(_payload("precios", "wamid.x"), enviador))
+    assert (primero, segundo) == (1, 0)
+    # "precios" produce dos respuestas (texto + lista): lo que importa es que el
+    # reintento no mande ningún payload adicional.
+    assert len(enviador.salida) == enviados_tras_el_primero
+
+
+def test_procesar_avisa_si_no_es_texto(bd):
+    p = _payload()
+    p["entry"][0]["changes"][0]["value"]["messages"][0] = {
+        "id": "wamid.img", "from": "5215500000001", "type": "image", "image": {"id": "X"},
+    }
+    enviador = _Enviador()
+    asyncio.run(whatsapp_webhook.procesar_evento(p, enviador))
+    assert "solo entiendo mensajes de texto" in _cuerpo(*enviador.salida[0])
+
+
+def test_procesar_guarda_el_telefono_en_la_sesion(bd):
+    enviador = _Enviador()
+    asyncio.run(whatsapp_webhook.procesar_evento(_payload("hola"), enviador))
+    assert engine.SESIONES["wa:5215500000001"].telefono == "5215500000001"

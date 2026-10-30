@@ -64,3 +64,44 @@ def extraer_mensajes(payload: dict[str, Any]) -> list[dict[str, str]]:
                 if msg_id and wa_id:
                     salida.append({"id": msg_id, "wa_id": wa_id, "texto": texto, "tipo": tipo})
     return salida
+
+
+# Los datos del negocio no cambian en caliente: se leen una sola vez.
+_DATOS: dict[str, Any] | None = None
+
+
+def _datos() -> dict[str, Any]:
+    global _DATOS
+    if _DATOS is None:
+        _DATOS = engine.cargar_datos()
+    return _DATOS
+
+
+async def procesar_evento(payload: dict[str, Any], enviar: Enviador | None = None) -> int:
+    """Atiende cada mensaje nuevo del payload. Devuelve cuántos mensajes respondió."""
+    enviar = enviar or wa_cliente.enviar
+    atendidos = 0
+
+    for msg in extraer_mensajes(payload):
+        if not store.registrar_evento(msg["id"]):
+            log.info("wa: evento repetido (reintento de Meta)")
+            continue
+
+        if not msg["texto"]:
+            await _enviar(msg["wa_id"], [{"tipo": "texto", "texto": AVISO_SIN_TEXTO}], enviar)
+            atendidos += 1
+            continue
+
+        # El motor registra el KPI del handoff y deja la sesión con su teléfono.
+        respuestas, _ = await engine.manejar(
+            f"wa:{msg['wa_id']}", msg["texto"], _datos(), canal="wa", telefono=msg["wa_id"]
+        )
+        await _enviar(msg["wa_id"], respuestas, enviar)
+        atendidos += 1
+
+    return atendidos
+
+
+async def _enviar(wa_id: str, respuestas: list[dict[str, Any]], enviar: Enviador) -> None:
+    for payload in whatsapp_formato.a_payloads(respuestas):
+        await enviar(wa_id, payload)
