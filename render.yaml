@@ -6,6 +6,9 @@ services:
     runtime: python
     plan: free
     region: oregon
+    # Desplegar en cada push a la rama de producción. Sin esto, Render no
+    # redespliega solo y el código de main se queda viejo en producción.
+    autoDeploy: true
     buildCommand: pip install -r requirements.txt
     # Render inyecta $PORT; uvicorn debe escuchar en 0.0.0.0 para ser alcanzable.
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
