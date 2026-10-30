@@ -107,6 +107,20 @@ tests/
 render.yaml       blueprint del deploy (runtime python, sin Docker)
 ```
 
+## Canal WhatsApp (opcional)
+
+El motor es el mismo del chat web; el adaptador vive en `app/whatsapp_webhook.py`
+y se puede probar sin cuenta de Meta:
+
+```bash
+WA_MODO=consola WA_VERIFY_TOKEN=prueba WA_APP_SECRET=prueba \
+  uvicorn app.main:app --port 8077
+python scripts/wa_simula.py "precios"
+```
+
+Con credenciales reales: webhook `https://<host>/wa/webhook`, campos `messages`,
+y las variables `WA_VERIFY_TOKEN`, `WA_APP_SECRET`, `WA_TOKEN`, `WA_PHONE_ID`.
+
 ## Deploy (Render, plan free)
 
 El blueprint `render.yaml` define el servicio. Los secretos se capturan en el panel, nunca

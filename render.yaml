@@ -26,3 +26,25 @@ services:
       # Google Calendar apagado a propósito: el token es personal.
       - key: GOOGLE_CALENDAR_ID
         value: ""
+      # ---------- WhatsApp Cloud API (opcional) ----------
+      - key: WA_MODO
+        value: graph
+      - key: WA_VERIFY_TOKEN
+        sync: false
+      - key: WA_APP_SECRET
+        sync: false
+      - key: WA_TOKEN
+        sync: false
+      - key: WA_PHONE_ID
+        sync: false
+      - key: WA_API_VERSION
+        value: v26.0
+      - key: MAX_MENSAJES_POR_SESION_WA
+        value: "500"
+      # ---------- Seguridad y operación ----------
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
