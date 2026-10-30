@@ -10,17 +10,6 @@ from tests.telefonos import TEL_A
 
 
 @pytest.fixture()
-def bd(tmp_path, monkeypatch):
-    """Base temporal sin seed. Sin esto, importar app.main siembra la BD real."""
-    monkeypatch.setattr(config, "DB_FILE", tmp_path / "test.db")
-    monkeypatch.setattr(config, "SEED_DEMO", False)
-    monkeypatch.setattr(store, "_inicializada", False)
-    store.init()
-    yield
-    store.reset()
-
-
-@pytest.fixture()
 def cliente(bd):
     # El import va aquí (después del monkeypatch de la fixture `bd`).
     from app.main import app

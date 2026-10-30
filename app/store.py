@@ -44,6 +44,18 @@ CREATE TABLE IF NOT EXISTS citas (
 );
 CREATE INDEX IF NOT EXISTS ix_citas_slot ON citas (slot);
 CREATE INDEX IF NOT EXISTS ix_citas_estado ON citas (estado);
+
+CREATE TABLE IF NOT EXISTS wa_eventos (
+    id        TEXT PRIMARY KEY,
+    recibido  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS handoffs (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    sid      TEXT NOT NULL,
+    mensaje  TEXT NOT NULL,
+    creado   TEXT NOT NULL
+);
 """
 
 
@@ -198,3 +210,36 @@ def reset() -> None:
     init()
     with _candado, _con() as con:
         con.execute("DELETE FROM citas")
+
+
+def registrar_evento(evento_id: str) -> bool:
+    """True la primera vez que se ve el id del mensaje; False si Meta lo reintentó.
+
+    Meta reintenta el webhook si no recibe 200 en 5 s. Sin esta tabla un
+    reintento vuelve a procesar el mismo mensaje y puede agendar dos citas.
+    """
+    init()
+    with _candado, _con() as con:
+        try:
+            con.execute(
+                "INSERT INTO wa_eventos (id, recibido) VALUES (?, ?)", (evento_id, _ahora())
+            )
+        except sqlite3.IntegrityError:
+            return False
+    return True
+
+
+def registrar_handoff(sid: str, mensaje: str) -> None:
+    """Deja rastro de cada conversación que pidió humano (es el KPI del bot)."""
+    init()
+    with _candado, _con() as con:
+        con.execute(
+            "INSERT INTO handoffs (sid, mensaje, creado) VALUES (?, ?, ?)",
+            (sid, (mensaje or "")[:500], _ahora()),
+        )
+
+
+def handoffs() -> list[dict[str, Any]]:
+    init()
+    with _con() as con:
+        return [dict(f) for f in con.execute("SELECT * FROM handoffs ORDER BY id DESC").fetchall()]
