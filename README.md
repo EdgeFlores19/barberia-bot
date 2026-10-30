@@ -2,7 +2,8 @@
 
 [![tests](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml)
 
-**Demo en vivo:** <https://navajazo-bot.onrender.com> · código de acceso `ambar`
+**Demo en vivo:** <https://navajazo-bot.onrender.com> · código de acceso `navajazo`
+(es el valor de `DEMO_CODE` en el panel de Render; en local el default es `ambar`)
 *(plan free: si estuvo dormida, la primera carga tarda ~50 s)*
 
 Asistente conversacional para un estudio de uñas en Aguascalientes: responde preguntas frecuentes, agenda citas
@@ -68,7 +69,8 @@ cp .env.example .env                               # opcional: clave DeepSeek
 .venv/Scripts/python -m uvicorn app.main:app --reload --port 8077
 ```
 
-Abre <http://127.0.0.1:8077> y usa el código de acceso `ambar` (configurable en `DEMO_CODE`).
+Abre <http://127.0.0.1:8077> y usa el código de acceso `ambar` (default de `DEMO_CODE` en
+`.env.example`; en Render el valor vive en el panel y hoy es `navajazo`).
 La primera vez siembra dos citas de ejemplo (`SEED_DEMO=0` lo desactiva).
 
 ### Pruebas
