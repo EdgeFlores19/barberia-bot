@@ -38,8 +38,18 @@ def _enviar(sid: str, texto: str, datos: dict):
 
 
 def _primer_slot(datos: dict, servicio_id: str = "manicura") -> str:
-    libres = engine.slots_disponibles(datos, servicio_id)
-    assert libres, "debería haber disponibilidad en los próximos 7 días"
+    """Primer hueco con margen suficiente para que la cancelación sea libre.
+
+    Sin este margen el test falla si el primer hueco cae dentro de las
+    `cancelacion_libre_hasta_horas` y la hora actual está cerca del cierre.
+    """
+    reglas = datos["reglas_agenda"]
+    limite = datetime.now() + timedelta(hours=reglas["cancelacion_libre_hasta_horas"] + 1)
+    libres = [
+        s for s in engine.slots_disponibles(datos, servicio_id)
+        if datetime.fromisoformat(s) >= limite
+    ]
+    assert libres, "debería haber disponibilidad con margen en los próximos 7 días"
     return libres[0]
 
 
