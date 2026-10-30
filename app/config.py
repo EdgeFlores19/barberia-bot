@@ -34,3 +34,6 @@ CALENDAR_TOKEN_FILE = os.getenv(
 )
 CALENDAR_TZ = os.getenv("CALENDAR_TZ", "America/Mexico_City")
 CALENDAR_TIMEOUT_S = float(os.getenv("CALENDAR_TIMEOUT_S", "8"))
+
+# Token de administración para GET /api/citas. Vacío = ruta deshabilitada (503).
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
