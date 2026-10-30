@@ -227,7 +227,9 @@ def test_purga_elimina_sesiones_viejas(datos, monkeypatch):
     monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
     engine.SESIONES.clear()
     engine.SESIONES["vieja"] = engine.Sesion("vieja")
-    engine.SESIONES["vieja"].ultima_actividad = reloj.ahora() - timedelta(hours=5)
+    # C7: el tope de la purga es max(TTL*8, TTL de humano) = 12 h por defecto,
+    # así que "vieja" tiene que estar más allá de las 12 h para que se borre.
+    engine.SESIONES["vieja"].ultima_actividad = reloj.ahora() - timedelta(hours=13)
 
     asyncio.run(engine.manejar("nueva", "hola", datos))
 
@@ -270,5 +272,38 @@ def test_web_sigue_cancelando_por_folio(datos):
     asyncio.run(engine.manejar("web1", f"cancelar {cita['folio']}", datos))
 
     assert store.obtener(cita["folio"])["estado"] == "cancelada"
+
+
+# ---------- C7: TTL de humano y contador de mensajes ----------
+def test_ttl_no_reinicia_una_conversacion_en_humano(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
+    monkeypatch.setattr(config, "SESION_HUMANO_TTL_MIN", 720)
+    s = engine.SESIONES["s5"] = engine.Sesion("s5", paso="humano", canal="wa", telefono=TEL_A)
+    s.ultima_actividad = reloj.ahora() - timedelta(minutes=90)
+
+    asyncio.run(engine.manejar("s5", "¿hola?", datos, canal="wa", telefono=TEL_A))
+
+    assert engine.SESIONES["s5"].paso == "humano"
+
+
+def test_humano_expira_con_su_ttl_largo(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_HUMANO_TTL_MIN", 720)
+    s = engine.SESIONES["s6"] = engine.Sesion("s6", paso="humano", handoff=True)
+    s.ultima_actividad = reloj.ahora() - timedelta(hours=13)
+
+    resp, s = asyncio.run(engine.manejar("s6", "hola", datos))
+
+    assert s.paso != "humano" and s.handoff is False
+    assert resp
+
+
+def test_ttl_reinicia_el_contador_de_mensajes(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
+    s = engine.SESIONES["s7"] = engine.Sesion("s7", mensajes=39)
+    s.ultima_actividad = reloj.ahora() - timedelta(minutes=31)
+
+    asyncio.run(engine.manejar("s7", "hola", datos))
+
+    assert engine.SESIONES["s7"].mensajes == 1
 
 

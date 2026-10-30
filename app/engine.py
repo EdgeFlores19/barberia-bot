@@ -55,8 +55,14 @@ USO_DIA = {"fecha": reloj.ahora().date(), "n": 0}
 
 
 def _purgar_sesiones() -> None:
-    """Descarta sesiones tan viejas que ya no pueden estar en conversación."""
-    tope = reloj.ahora() - timedelta(minutes=config.SESION_TTL_MIN * 8)
+    """Descarta sesiones tan viejas que ya no pueden estar en conversación.
+
+    El tope respeta el TTL largo de `humano`: una conversación con la
+    manicurista sigue viva 12 h aunque el TTL corto sea de 30 min.
+    """
+    tope = reloj.ahora() - timedelta(
+        minutes=max(config.SESION_TTL_MIN * 8, config.SESION_HUMANO_TTL_MIN)
+    )
     for sid in [k for k, v in SESIONES.items() if v.ultima_actividad < tope]:
         SESIONES.pop(sid, None)
 
@@ -189,11 +195,19 @@ async def manejar(
     if telefono:
         s.telefono = telefono
 
-    # TTL: el cliente volvió después de mucho; se retoma desde el menú.
-    if s.paso != "inicio" and reloj.ahora() - s.ultima_actividad > timedelta(minutes=config.SESION_TTL_MIN):
-        s.paso, s.servicio_id, s.slot, s.folio, s.nombre = "inicio", None, None, None, ""
+    ahora = reloj.ahora()
+    inactivo = ahora - s.ultima_actividad
+    if inactivo > timedelta(minutes=config.SESION_TTL_MIN):
+        # Conversación nueva: contador nuevo y, salvo que esté en manos de la
+        # manicurista, se retoma desde el menú.
+        s.mensajes = 0
+        if s.paso not in ("inicio", "humano"):
+            s.paso, s.servicio_id, s.slot, s.folio, s.nombre = "inicio", None, None, None, ""
+    if s.paso == "humano" and inactivo > timedelta(minutes=config.SESION_HUMANO_TTL_MIN):
+        # El TTL corto no reinicia `humano`: el bot no habla encima del barbero.
+        s.paso, s.handoff = "inicio", False
 
-    s.ultima_actividad = reloj.ahora()
+    s.ultima_actividad = ahora
     s.mensajes += 1
     _purgar_sesiones()
     txt = _norm(texto)
@@ -221,6 +235,12 @@ async def manejar(
         return [_t("Listo, le paso tu conversación a la manicurista y te contesta en cuanto termine con su clienta. "
                    f"Si urge, marca al {datos['telefono']}."),
                 _b("¿Algo más mientras?", MENU)], s
+
+    # Silencio del bot mientras la conversación está en manos de la manicurista.
+    # Va después de la salida global de "menu" (que está arriba) para que el
+    # cliente siempre pueda recuperar al bot.
+    if s.canal == "wa" and s.paso == "humano" and txt != "menu":
+        return [], s
 
     # atajos con folio: "cancelar AMB-7K4Q", "mover AMB-7K4Q"
     folio_dicho = _folio_de(texto)
