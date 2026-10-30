@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from app import config, engine, store
+from app import config, engine, reloj, store
 
 CODIGO_SLOT = "%Y-%m-%dT%H:%M"
 
@@ -44,7 +44,7 @@ def _primer_slot(datos: dict, servicio_id: str = "manicura") -> str:
     `cancelacion_libre_hasta_horas` y la hora actual está cerca del cierre.
     """
     reglas = datos["reglas_agenda"]
-    limite = datetime.now() + timedelta(hours=reglas["cancelacion_libre_hasta_horas"] + 1)
+    limite = reloj.ahora() + timedelta(hours=reglas["cancelacion_libre_hasta_horas"] + 1)
     libres = [
         s for s in engine.slots_disponibles(datos, servicio_id)
         if datetime.fromisoformat(s) >= limite

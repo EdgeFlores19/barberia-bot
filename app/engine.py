@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import calendar_sync, config, llm, store
+from . import calendar_sync, config, llm, reloj, store
 from . import slots as horarios
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
@@ -47,7 +47,7 @@ class Sesion:
 
 
 SESIONES: dict[str, Sesion] = {}
-USO_DIA = {"fecha": datetime.now().date(), "n": 0}
+USO_DIA = {"fecha": reloj.ahora().date(), "n": 0}
 
 
 # ---------- respuestas ----------
@@ -122,7 +122,7 @@ def slots_disponibles(
     if excluir_folio:
         # Al reagendar, su propio horario no debe bloquearse a sí mismo.
         citas = [c for c in citas if c["folio"] != excluir_folio]
-    return horarios.generar_slots(datos, servicio_id, citas, ahora or datetime.now())
+    return horarios.generar_slots(datos, servicio_id, citas, ahora or reloj.ahora())
 
 
 def _etiqueta_slot(iso: str) -> str:
@@ -160,7 +160,7 @@ def _fuera_de_ventana(cita: dict[str, Any], datos: dict[str, Any]) -> bool:
         inicio = datetime.fromisoformat(cita["slot"])
     except ValueError:
         return False
-    return inicio - datetime.now() < timedelta(hours=horas)
+    return inicio - reloj.ahora() < timedelta(hours=horas)
 
 
 # ---------- flujo ----------
@@ -171,8 +171,8 @@ async def manejar(sid: str, texto: str, datos: dict[str, Any]) -> tuple[list[dic
     txt = _norm(texto)
 
     # presupuesto duro
-    if USO_DIA["fecha"] != datetime.now().date():
-        USO_DIA.update(fecha=datetime.now().date(), n=0)
+    if USO_DIA["fecha"] != reloj.ahora().date():
+        USO_DIA.update(fecha=reloj.ahora().date(), n=0)
     USO_DIA["n"] += 1
     if s.mensajes > config.MAX_MENSAJES_POR_SESION:
         # Un visitante que explora FAQ + agendar + cancelar ronda los 25 mensajes.
@@ -309,7 +309,7 @@ def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     sid = s.servicio_id or ""
     slot = s.slot or ""
 
-    ok, motivo = horarios.validar(datos, sid, slot, store.confirmadas(), datetime.now())
+    ok, motivo = horarios.validar(datos, sid, slot, store.confirmadas(), reloj.ahora())
     if not ok:
         s.paso = "agendar_slot"
         libres = slots_disponibles(datos, sid)

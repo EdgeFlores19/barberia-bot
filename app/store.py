@@ -8,10 +8,9 @@ from __future__ import annotations
 import secrets
 import sqlite3
 import threading
-from datetime import datetime
 from typing import Any
 
-from . import config
+from . import config, reloj
 
 # Sin caracteres que se confundan al dictarlos por teléfono (0/O, 1/I/L).
 ALFABETO_FOLIO = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
@@ -70,7 +69,7 @@ def init() -> None:
 
 
 def _ahora() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return reloj.ahora().isoformat(timespec="seconds")
 
 
 def _fila(r: sqlite3.Row | None) -> dict[str, Any] | None:
