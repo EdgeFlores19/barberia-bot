@@ -121,6 +121,11 @@ python scripts/wa_simula.py "precios"
 Con credenciales reales: webhook `https://<host>/wa/webhook`, campos `messages`,
 y las variables `WA_VERIFY_TOKEN`, `WA_APP_SECRET`, `WA_TOKEN`, `WA_PHONE_ID`.
 
+El canal está **apagado en producción** a propósito: sin las variables `WA_*` el webhook
+responde 503. Lo que falta para encenderlo (disco persistente, `SEED_DEMO=0`, aviso de
+privacidad) y las decisiones de diseño están en
+[`docs/adr/0001-canal-whatsapp-cloud-api.md`](docs/adr/0001-canal-whatsapp-cloud-api.md).
+
 ## Deploy (Render, plan free)
 
 El blueprint `render.yaml` define el servicio. Los secretos se capturan en el panel, nunca
