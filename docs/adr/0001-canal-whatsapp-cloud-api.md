@@ -2,7 +2,10 @@
 
 - **Estado:** aceptado (canal implementado, **apagado en producción**)
 - **Fecha:** 2026-10-30
-- **Rama:** `feat/whatsapp-meta` (29 commits, 28 archivos, +1720/−68)
+- **Rama:** `feat/whatsapp-meta` — 30 commits propios del canal (29 archivos, +1877/−68).
+  El PR [#1](https://github.com/EdgeFlores19/barberia-bot/pull/1) muestra 34 commits y
+  35 archivos porque `main` local tenía 4 commits sin publicar en `origin/main`
+  (hotfix H1 de `GET /api/citas` + planes normalizados).
 - **Alcance:** conectar el bot de barbería a la WhatsApp Cloud API sin reescribir el motor.
 - **Planes de referencia:** `docs/plans/plan-whatsapp-v3-correcciones.md` (manda),
   `docs/plans/adaptador-whatsapp-meta-v2.md`.
