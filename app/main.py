@@ -10,10 +10,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, engine, seed, store
+from . import config, engine, seed, store, whatsapp_webhook
 
 app = FastAPI(title="Estudio de Uñas Ámbar — bot demo")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
+app.include_router(whatsapp_webhook.router)
 
 DATOS = engine.cargar_datos()
 store.init()

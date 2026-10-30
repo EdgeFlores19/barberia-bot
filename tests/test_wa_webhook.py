@@ -163,3 +163,50 @@ def test_procesar_guarda_el_telefono_en_la_sesion(bd):
     enviador = _Enviador()
     asyncio.run(whatsapp_webhook.procesar_evento(_payload("hola"), enviador))
     assert engine.SESIONES["wa:5215500000001"].telefono == "5215500000001"
+
+
+def _cliente():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    return TestClient(app)
+
+
+def test_webhook_get_devuelve_el_challenge(bd, monkeypatch):
+    monkeypatch.setattr(config, "WA_VERIFY_TOKEN", "prueba")
+    r = _cliente().get("/wa/webhook", params={
+        "hub.mode": "subscribe", "hub.verify_token": "prueba", "hub.challenge": "12345",
+    })
+    assert r.status_code == 200
+    assert r.text == "12345"
+
+
+def test_webhook_get_rechaza_token_incorrecto(bd, monkeypatch):
+    monkeypatch.setattr(config, "WA_VERIFY_TOKEN", "prueba")
+    r = _cliente().get("/wa/webhook", params={
+        "hub.mode": "subscribe", "hub.verify_token": "otro", "hub.challenge": "12345",
+    })
+    assert r.status_code == 403
+
+
+def test_webhook_post_sin_firma_devuelve_403(bd, monkeypatch):
+    monkeypatch.setattr(config, "WA_MODO", "consola")
+    monkeypatch.setattr(config, "WA_VERIFY_TOKEN", "prueba")
+    monkeypatch.setattr(config, "WA_APP_SECRET", "s3cr3t")
+    r = _cliente().post("/wa/webhook", content=json.dumps(_payload("hola")))
+    assert r.status_code == 403
+
+
+def test_webhook_post_con_firma_responde_200(bd, monkeypatch):
+    monkeypatch.setattr(config, "WA_MODO", "consola")
+    monkeypatch.setattr(config, "WA_VERIFY_TOKEN", "prueba")
+    monkeypatch.setattr(config, "WA_APP_SECRET", "s3cr3t")
+    cuerpo = json.dumps(_payload("precios")).encode()
+    r = _cliente().post(
+        "/wa/webhook", content=cuerpo,
+        headers={"Content-Type": "application/json", "X-Hub-Signature-256": _firmar(cuerpo)},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    assert store.registrar_evento("wamid.1") is False  # ya estaba registrado

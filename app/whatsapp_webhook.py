@@ -105,3 +105,42 @@ async def procesar_evento(payload: dict[str, Any], enviar: Enviador | None = Non
 async def _enviar(wa_id: str, respuestas: list[dict[str, Any]], enviar: Enviador) -> None:
     for payload in whatsapp_formato.a_payloads(respuestas):
         await enviar(wa_id, payload)
+
+
+@router.get("/wa/webhook")
+def verificar(
+    hub_mode: str = Query("", alias="hub.mode"),
+    hub_token: str = Query("", alias="hub.verify_token"),
+    hub_challenge: str = Query("", alias="hub.challenge"),
+) -> PlainTextResponse:
+    """Meta llama aquí una vez, al guardar la URL del webhook en la app."""
+    if (
+        hub_mode == "subscribe"
+        and config.WA_VERIFY_TOKEN
+        and hmac.compare_digest(hub_token.encode(), config.WA_VERIFY_TOKEN.encode())
+    ):
+        return PlainTextResponse(hub_challenge)
+    raise HTTPException(status_code=403, detail="Verificación fallida.")
+
+
+@router.post("/wa/webhook")
+async def recibir(request: Request, tareas: BackgroundTasks) -> dict[str, bool]:
+    """Meta exige 200 en menos de 5 s: se contesta y el trabajo va en segundo plano."""
+    if not config.wa_habilitado():
+        raise HTTPException(status_code=503, detail="WhatsApp no configurado.")
+    cuerpo = await request.body()
+    if not firma_valida(cuerpo, request.headers.get("x-hub-signature-256", "")):
+        raise HTTPException(status_code=403, detail="Firma inválida.")
+    try:
+        payload = json.loads(cuerpo or b"{}")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="JSON inválido.") from exc
+    tareas.add_task(_procesar_seguro, payload)
+    return {"ok": True}
+
+
+async def _procesar_seguro(payload: dict[str, Any]) -> None:
+    try:
+        await procesar_evento(payload)
+    except Exception:  # noqa: BLE001 - un fallo aquí no debe tumbar el webhook
+        log.exception("wa: fallo procesando el evento")
