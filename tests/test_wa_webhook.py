@@ -210,3 +210,11 @@ def test_webhook_post_con_firma_responde_200(bd, monkeypatch):
     assert r.status_code == 200
     assert r.json() == {"ok": True}
     assert store.registrar_evento("wamid.1") is False  # ya estaba registrado
+
+
+def test_hay_un_candado_por_telefono():
+    a = whatsapp_webhook.candado("5215500000001")
+    b = whatsapp_webhook.candado("5215500000001")
+    c = whatsapp_webhook.candado("5215500000002")
+    assert a is b
+    assert a is not c

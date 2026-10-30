@@ -5,6 +5,7 @@ entrada de Meta a texto del motor y respuestas del motor a payloads de Graph.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -83,21 +84,22 @@ async def procesar_evento(payload: dict[str, Any], enviar: Enviador | None = Non
     atendidos = 0
 
     for msg in extraer_mensajes(payload):
-        if not store.registrar_evento(msg["id"]):
-            log.info("wa: evento repetido (reintento de Meta)")
-            continue
+        async with candado(msg["wa_id"]):
+            if not store.registrar_evento(msg["id"]):
+                log.info("wa: evento repetido (reintento de Meta)")
+                continue
 
-        if not msg["texto"]:
-            await _enviar(msg["wa_id"], [{"tipo": "texto", "texto": AVISO_SIN_TEXTO}], enviar)
+            if not msg["texto"]:
+                await _enviar(msg["wa_id"], [{"tipo": "texto", "texto": AVISO_SIN_TEXTO}], enviar)
+                atendidos += 1
+                continue
+
+            # El motor registra el KPI del handoff y deja la sesión con su teléfono.
+            respuestas, _ = await engine.manejar(
+                f"wa:{msg['wa_id']}", msg["texto"], _datos(), canal="wa", telefono=msg["wa_id"]
+            )
+            await _enviar(msg["wa_id"], respuestas, enviar)
             atendidos += 1
-            continue
-
-        # El motor registra el KPI del handoff y deja la sesión con su teléfono.
-        respuestas, _ = await engine.manejar(
-            f"wa:{msg['wa_id']}", msg["texto"], _datos(), canal="wa", telefono=msg["wa_id"]
-        )
-        await _enviar(msg["wa_id"], respuestas, enviar)
-        atendidos += 1
 
     return atendidos
 
@@ -144,3 +146,13 @@ async def _procesar_seguro(payload: dict[str, Any]) -> None:
         await procesar_evento(payload)
     except Exception:  # noqa: BLE001 - un fallo aquí no debe tumbar el webhook
         log.exception("wa: fallo procesando el evento")
+
+
+_CANDADOS: dict[str, asyncio.Lock] = {}
+
+
+def candado(wa_id: str) -> asyncio.Lock:
+    """Un lock por teléfono: serializa los mensajes de un mismo cliente."""
+    if wa_id not in _CANDADOS:
+        _CANDADOS[wa_id] = asyncio.Lock()
+    return _CANDADOS[wa_id]
