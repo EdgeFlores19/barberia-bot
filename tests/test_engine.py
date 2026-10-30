@@ -5,14 +5,21 @@ Corre con: .venv/Scripts/python.exe -m pytest tests/test_engine.py -q
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pytest
 
-from app import config, engine, store
+from app import config, engine, reloj, store
+
+from tests.telefonos import TEL_A, TEL_A_SIN_1, TEL_B
 
 CODIGO_SLOT = "%Y-%m-%dT%H:%M"
+
+# Toda prueba del archivo usa la base temporal de tests/conftest.py: una sola
+# definición de la fixture `bd` para todo el repo.
+pytestmark = pytest.mark.usefixtures("bd")
 
 
 @pytest.fixture()
@@ -22,24 +29,23 @@ def datos() -> dict:
     return d
 
 
-@pytest.fixture(autouse=True)
-def bd_temporal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Cada prueba usa su propia base y arranca vacía."""
-    monkeypatch.setattr(config, "DB_FILE", tmp_path / "test.db")
-    monkeypatch.setattr(store, "_inicializada", False)
-    store.init()
-    engine.SESIONES.clear()
-    yield
-    store.reset()
-
-
 def _enviar(sid: str, texto: str, datos: dict):
     return asyncio.run(engine.manejar(sid, texto, datos))
 
 
 def _primer_slot(datos: dict, servicio_id: str = "manicura") -> str:
-    libres = engine.slots_disponibles(datos, servicio_id)
-    assert libres, "debería haber disponibilidad en los próximos 7 días"
+    """Primer hueco con margen suficiente para que la cancelación sea libre.
+
+    Sin este margen el test falla si el primer hueco cae dentro de las
+    `cancelacion_libre_hasta_horas` y la hora actual está cerca del cierre.
+    """
+    reglas = datos["reglas_agenda"]
+    limite = reloj.ahora() + timedelta(hours=reglas["cancelacion_libre_hasta_horas"] + 1)
+    libres = [
+        s for s in engine.slots_disponibles(datos, servicio_id)
+        if datetime.fromisoformat(s) >= limite
+    ]
+    assert libres, "debería haber disponibilidad con margen en los próximos 7 días"
     return libres[0]
 
 
@@ -169,3 +175,252 @@ def test_reset_vacia_la_agenda(datos):
     store.reset()
     assert store.listar() == []
     assert store.ocupados() == set()
+
+
+# ---------- Tarea 12: canal, teléfono y expiración de sesión ----------
+def test_canal_y_telefono_se_guardan_en_la_sesion(datos):
+    resp, s = asyncio.run(engine.manejar("s1", "hola", datos, canal="wa", telefono=TEL_A))
+
+    assert s.canal == "wa"
+    assert s.telefono == TEL_A
+    assert resp
+
+
+def test_ttl_reinicia_el_paso_a_inicio(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
+    engine.SESIONES["s2"] = engine.Sesion("s2", paso="agendar_servicio", servicio_id="manicura")
+    engine.SESIONES["s2"].ultima_actividad = reloj.ahora() - timedelta(minutes=31)
+
+    resp, s = asyncio.run(engine.manejar("s2", "hola", datos))
+
+    assert s.paso == "inicio"
+    assert s.servicio_id is None
+    assert resp
+
+
+def test_ttl_no_reinicia_dentro_del_limite(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
+    engine.SESIONES["s3"] = engine.Sesion("s3", paso="agendar_servicio", servicio_id="manicura")
+    engine.SESIONES["s3"].ultima_actividad = reloj.ahora() - timedelta(minutes=5)
+
+    asyncio.run(engine.manejar("s3", "manicura", datos))
+
+    assert engine.SESIONES["s3"].paso != "inicio"
+
+
+def test_ultima_actividad_se_actualiza_en_cada_mensaje(datos):
+    s = engine.SESIONES["s4"] = engine.Sesion("s4", paso="agendar_servicio", servicio_id="manicura")
+    s.ultima_actividad = reloj.ahora() - timedelta(minutes=10)
+
+    asyncio.run(engine.manejar("s4", "manicura", datos))
+
+    assert reloj.ahora() - s.ultima_actividad < timedelta(seconds=5)
+
+
+def test_purga_elimina_sesiones_viejas(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
+    engine.SESIONES.clear()
+    engine.SESIONES["vieja"] = engine.Sesion("vieja")
+    # C7: el tope de la purga es max(TTL*8, TTL de humano) = 12 h por defecto,
+    # así que "vieja" tiene que estar más allá de las 12 h para que se borre.
+    engine.SESIONES["vieja"].ultima_actividad = reloj.ahora() - timedelta(hours=13)
+
+    asyncio.run(engine.manejar("nueva", "hola", datos))
+
+    assert "vieja" not in engine.SESIONES
+
+
+# ---------- Tarea 13: el folio solo abre la cita del mismo teléfono ----------
+def _cita_ajena(datos: dict, telefono: str = TEL_B) -> dict:
+    """Cita en un horario real con margen de cancelación (C9: sin fecha fija)."""
+    slot = _primer_slot(datos)
+    return store.crear(slot=slot, servicio_id="manicura", nombre="Otro", telefono=telefono)
+
+
+def test_wa_no_cancela_cita_de_otro_telefono(datos):
+    cita = _cita_ajena(datos, TEL_B)
+
+    ajena, _ = asyncio.run(engine.manejar("w1", f"cancelar {cita['folio']}", datos,
+                                          canal="wa", telefono=TEL_A))
+    inexistente, _ = asyncio.run(engine.manejar("w2", "cancelar AMB-ZZZZ", datos,
+                                               canal="wa", telefono=TEL_A))
+
+    assert store.obtener(cita["folio"])["estado"] == "confirmada"
+    # Indistinguible de un folio inexistente: no se revela que la cita existe.
+    assert ajena == inexistente
+
+
+def test_wa_folio_ajeno_responde_igual_que_folio_inexistente(datos):
+    """C9.3: un folio ajeno no se distingue de uno inexistente."""
+    cita = _cita_ajena(datos)
+    ajeno, _ = asyncio.run(engine.manejar("w5", f"cancelar {cita['folio']}", datos,
+                                          canal="wa", telefono=TEL_A))
+    inexistente, _ = asyncio.run(engine.manejar("w6", "cancelar AMB-ZZZZ", datos,
+                                                canal="wa", telefono=TEL_A))
+
+    assert ajeno == inexistente
+
+
+def test_wa_cancela_su_propia_cita_aunque_llegue_con_521(datos):
+    cita = _cita_ajena(datos, TEL_A)
+
+    resp, _ = asyncio.run(engine.manejar("w3", f"cancelar {cita['folio']}", datos,
+                                         canal="wa", telefono=TEL_A_SIN_1))
+
+    assert "Cancelada" in resp[0]["texto"]
+    assert store.obtener(cita["folio"])["estado"] == "cancelada"
+
+
+def test_web_sigue_cancelando_por_folio(datos):
+    cita = _cita_ajena(datos, telefono="")
+
+    asyncio.run(engine.manejar("web1", f"cancelar {cita['folio']}", datos))
+
+    assert store.obtener(cita["folio"])["estado"] == "cancelada"
+
+
+# ---------- C7: TTL de humano y contador de mensajes ----------
+def test_ttl_no_reinicia_una_conversacion_en_humano(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
+    monkeypatch.setattr(config, "SESION_HUMANO_TTL_MIN", 720)
+    s = engine.SESIONES["s5"] = engine.Sesion("s5", paso="humano", canal="wa", telefono=TEL_A)
+    s.ultima_actividad = reloj.ahora() - timedelta(minutes=90)
+
+    asyncio.run(engine.manejar("s5", "¿hola?", datos, canal="wa", telefono=TEL_A))
+
+    assert engine.SESIONES["s5"].paso == "humano"
+
+
+def test_humano_expira_con_su_ttl_largo(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_HUMANO_TTL_MIN", 720)
+    s = engine.SESIONES["s6"] = engine.Sesion("s6", paso="humano", handoff=True)
+    s.ultima_actividad = reloj.ahora() - timedelta(hours=13)
+
+    resp, s = asyncio.run(engine.manejar("s6", "hola", datos))
+
+    assert s.paso != "humano" and s.handoff is False
+    assert resp
+
+
+def test_ttl_reinicia_el_contador_de_mensajes(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
+    s = engine.SESIONES["s7"] = engine.Sesion("s7", mensajes=39)
+    s.ultima_actividad = reloj.ahora() - timedelta(minutes=31)
+
+    asyncio.run(engine.manejar("s7", "hola", datos))
+
+    assert engine.SESIONES["s7"].mensajes == 1
+
+
+# ---------- C10: el handoff registra, avisa y deja el flag activo ----------
+def _contar_handoffs() -> int:
+    with store._con() as con:
+        return con.execute("SELECT COUNT(*) FROM handoffs").fetchone()[0]
+
+
+def test_handoff_registra_avisa_y_deja_el_flag_activo(datos, bd, monkeypatch):
+    avisos_enviados = []
+    monkeypatch.setattr(engine.avisos, "notificar_handoff",
+                        lambda sid, tel, msg: avisos_enviados.append((sid, tel, msg)))
+
+    asyncio.run(engine.manejar("h1", "quiero hablar con una persona", datos))
+
+    assert len(avisos_enviados) == 1
+    assert _contar_handoffs() == 1
+    assert engine.SESIONES["h1"].handoff is True
+    assert engine.SESIONES["h1"].paso == "humano"
+
+
+def test_menu_devuelve_al_bot_y_baja_el_flag(datos, bd, monkeypatch):
+    monkeypatch.setattr(engine.avisos, "notificar_handoff", lambda *a: None)
+
+    asyncio.run(engine.manejar("h2", "quiero hablar con una persona", datos))
+    asyncio.run(engine.manejar("h2", "menu", datos))
+
+    assert engine.SESIONES["h2"].handoff is False
+    assert engine.SESIONES["h2"].paso != "humano"
+
+
+def test_dos_handoffs_en_la_misma_sesion_avisan_dos_veces(datos, bd, monkeypatch):
+    avisos_enviados = []
+    monkeypatch.setattr(engine.avisos, "notificar_handoff",
+                        lambda sid, tel, msg: avisos_enviados.append(sid))
+
+    asyncio.run(engine.manejar("h3", "quiero hablar con una persona", datos))
+    asyncio.run(engine.manejar("h3", "menu", datos))
+    asyncio.run(engine.manejar("h3", "quiero hablar con una persona", datos))
+
+    assert len(avisos_enviados) == 2
+    assert _contar_handoffs() == 2
+
+
+def test_en_humano_el_bot_calla_salvo_menu(datos, bd, monkeypatch):
+    monkeypatch.setattr(engine.avisos, "notificar_handoff", lambda *a: None)
+    asyncio.run(engine.manejar("h4", "quiero hablar con una persona", datos,
+                               canal="wa", telefono=TEL_A))
+
+    resp, _ = asyncio.run(engine.manejar("h4", "¿hola?", datos, canal="wa", telefono=TEL_A))
+    assert resp == []
+
+    resp, _ = asyncio.run(engine.manejar("h4", "menu", datos, canal="wa", telefono=TEL_A))
+    assert resp
+
+
+# ---------- Tarea 15: calendar_sync fuera del event loop ----------
+def _libres_con_margen(datos: dict, servicio_id: str = "manicura") -> list[str]:
+    reglas = datos["reglas_agenda"]
+    limite = reloj.ahora() + timedelta(hours=reglas["cancelacion_libre_hasta_horas"] + 1)
+    return [
+        s for s in engine.slots_disponibles(datos, servicio_id)
+        if datetime.fromisoformat(s) >= limite
+    ]
+
+
+async def _agendar_hasta_confirmar(sid: str, datos: dict, indice: int = 0) -> str:
+    """Agenda por el flujo normal usando el hueco `indice` de los libres.
+
+    C12: con índices distintos, dos conversaciones simultáneas no chocan por
+    SlotOcupado y el test de concurrencia mide de verdad el event loop.
+    """
+    libres = _libres_con_margen(datos)
+    assert len(libres) > indice, "hacen falta al menos dos huecos con margen"
+    slot = libres[indice]
+
+    await engine.manejar(sid, "agendar", datos)
+    await engine.manejar(sid, "manicura", datos)
+    await engine.manejar(sid, engine._etiqueta_slot(slot), datos)
+    resp, _ = await engine.manejar(sid, "Cliente Prueba", datos)
+    return resp[0]["texto"]
+
+
+def test_calendar_corre_en_otro_hilo(datos, monkeypatch):
+    hilos = []
+
+    def crear_lento(cita, datos):
+        hilos.append(threading.current_thread().name)
+        return None
+
+    monkeypatch.setattr(engine.calendar_sync, "crear", crear_lento)
+    asyncio.run(_agendar_hasta_confirmar("t1", datos))
+
+    assert hilos and hilos[0] != threading.main_thread().name
+
+
+def test_un_calendar_lento_no_bloquea_otra_conversacion(datos, monkeypatch):
+    def crear_lento(cita, datos):
+        time.sleep(0.3)
+        return None
+
+    monkeypatch.setattr(engine.calendar_sync, "crear", crear_lento)
+
+    async def dos_a_la_vez():
+        inicio = time.perf_counter()
+        await asyncio.gather(
+            _agendar_hasta_confirmar("a", datos, 0),
+            _agendar_hasta_confirmar("b", datos, 1),
+        )
+        return time.perf_counter() - inicio
+
+    assert asyncio.run(dos_a_la_vez()) < 0.5      # secuencial serían 0.6 s
+
+

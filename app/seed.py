@@ -13,15 +13,16 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import slots as horarios
+from . import reloj, slots as horarios
 from . import store
 
 log = logging.getLogger("ambar.seed")
 
 # (servicio_id, días de anticipación, nombre, teléfono)
 PLAN = [
-    ("manicura_pedicura", 3, "Luis Ramírez", "449 118 2043"),
-    ("gelish", 5, "Ana Beltrán", "449 205 7712"),
+    # Teléfonos ficticios (lada 55 reservada para ejemplos). Nunca números reales.
+    ("manicura_pedicura", 3, "Luis Ramírez", "55 0000 0011"),
+    ("gelish", 5, "Ana Beltrán", "55 0000 0022"),
 ]
 
 
@@ -30,7 +31,7 @@ def sembrar_si_vacio(datos: dict[str, Any], ahora: datetime | None = None) -> in
     if store.listar():
         return 0
 
-    ahora = ahora or datetime.now()
+    ahora = ahora or reloj.ahora()
     creadas = 0
     for servicio_id, dias, nombre, telefono in PLAN:
         libres = horarios.generar_slots(

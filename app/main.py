@@ -8,12 +8,13 @@ import uuid
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from . import config, engine, seed, store
+from . import config, engine, seed, store, whatsapp_webhook
 
 app = FastAPI(title="Estudio de Uñas Ámbar — bot demo")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
+app.include_router(whatsapp_webhook.router)
 
 DATOS = engine.cargar_datos()
 store.init()
@@ -23,9 +24,9 @@ if config.SEED_DEMO:
 
 
 class Entrada(BaseModel):
-    sid: str
-    texto: str
-    codigo: str = ""
+    sid: str = Field(max_length=64)
+    texto: str = Field(max_length=500)
+    codigo: str = Field(default="", max_length=100)
 
 
 class NuevaSesion(BaseModel):
@@ -61,6 +62,9 @@ def nueva_sesion(body: NuevaSesion):
 async def mensaje(body: Entrada):
     if config.DEMO_CODE and body.codigo.strip() != config.DEMO_CODE:
         raise HTTPException(status_code=401, detail="Código de demo inválido.")
+    # El chat web no puede entrar a la sesión de un cliente de WhatsApp.
+    if body.sid.startswith("wa:"):
+        raise HTTPException(status_code=400, detail="sid inválido.")
     if not body.texto.strip():
         raise HTTPException(status_code=422, detail="Mensaje vacío.")
     respuestas, sesion = await engine.manejar(body.sid, body.texto.strip(), DATOS)

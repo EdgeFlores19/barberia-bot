@@ -8,10 +8,9 @@ from __future__ import annotations
 import secrets
 import sqlite3
 import threading
-from datetime import datetime
 from typing import Any
 
-from . import config
+from . import config, reloj
 
 # Sin caracteres que se confundan al dictarlos por teléfono (0/O, 1/I/L).
 ALFABETO_FOLIO = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
@@ -45,6 +44,26 @@ CREATE TABLE IF NOT EXISTS citas (
 );
 CREATE INDEX IF NOT EXISTS ix_citas_slot ON citas (slot);
 CREATE INDEX IF NOT EXISTS ix_citas_estado ON citas (estado);
+
+CREATE TABLE IF NOT EXISTS wa_eventos (
+    id        TEXT PRIMARY KEY,
+    recibido  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS handoffs (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    sid      TEXT NOT NULL,
+    mensaje  TEXT NOT NULL,
+    creado   TEXT NOT NULL
+);
+
+-- Mensajes atendidos por el canal WhatsApp: topes por teléfono y global.
+CREATE TABLE IF NOT EXISTS wa_uso (
+    telefono TEXT NOT NULL,
+    momento  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_wa_uso_momento ON wa_uso (momento);
+CREATE INDEX IF NOT EXISTS ix_wa_uso_telefono_momento ON wa_uso (telefono, momento);
 """
 
 
@@ -70,7 +89,7 @@ def init() -> None:
 
 
 def _ahora() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return reloj.ahora().isoformat(timespec="seconds")
 
 
 def _fila(r: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -199,3 +218,55 @@ def reset() -> None:
     init()
     with _candado, _con() as con:
         con.execute("DELETE FROM citas")
+
+
+def registrar_evento(evento_id: str) -> bool:
+    """True la primera vez que se ve el id del mensaje; False si Meta lo reintentó.
+
+    Meta reintenta el webhook si no recibe 200 en 5 s. Sin esta tabla un
+    reintento vuelve a procesar el mismo mensaje y puede agendar dos citas.
+    """
+    init()
+    with _candado, _con() as con:
+        try:
+            con.execute(
+                "INSERT INTO wa_eventos (id, recibido) VALUES (?, ?)", (evento_id, _ahora())
+            )
+        except sqlite3.IntegrityError:
+            return False
+    return True
+
+
+def registrar_handoff(sid: str, mensaje: str) -> None:
+    """Deja rastro de cada conversación que pidió humano (es el KPI del bot)."""
+    init()
+    with _candado, _con() as con:
+        con.execute(
+            "INSERT INTO handoffs (sid, mensaje, creado) VALUES (?, ?, ?)",
+            (sid, (mensaje or "")[:500], _ahora()),
+        )
+
+
+def handoffs() -> list[dict[str, Any]]:
+    init()
+    with _con() as con:
+        return [dict(f) for f in con.execute("SELECT * FROM handoffs ORDER BY id DESC").fetchall()]
+
+
+def wa_sumar(telefono: str, momento: str) -> None:
+    """Anota un mensaje atendido del canal WhatsApp (teléfono ya normalizado)."""
+    init()
+    with _candado, _con() as con:
+        con.execute("INSERT INTO wa_uso (telefono, momento) VALUES (?, ?)", (telefono, momento))
+
+
+def wa_contar_desde(desde: str, telefono: str | None = None) -> int:
+    """Mensajes atendidos desde `desde` (ISO). Sin teléfono cuenta todos."""
+    init()
+    sql = "SELECT COUNT(*) FROM wa_uso WHERE momento >= ?"
+    args: list[Any] = [desde]
+    if telefono:
+        sql += " AND telefono = ?"
+        args.append(telefono)
+    with _con() as con:
+        return con.execute(sql, args).fetchone()[0]

@@ -5,6 +5,7 @@ La disponibilidad la calcula app/slots.py; las citas viven en app/store.py (SQLi
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import unicodedata
@@ -12,8 +13,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import calendar_sync, config, llm, store
+from . import avisos, calendar_sync, config, llm, reloj, store
 from . import slots as horarios
+from .telefono import t10 as _t10
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
@@ -44,10 +46,26 @@ class Sesion:
     handoff: bool = False
     resuelta: bool = False
     historial: list[dict[str, str]] = field(default_factory=list)
+    canal: str = "web"                      # "web" | "wa"
+    telefono: str = ""                      # tal como lo manda el canal
+    ultima_actividad: datetime = field(default_factory=reloj.ahora)
 
 
 SESIONES: dict[str, Sesion] = {}
-USO_DIA = {"fecha": datetime.now().date(), "n": 0}
+USO_DIA = {"fecha": reloj.ahora().date(), "n": 0}
+
+
+def _purgar_sesiones() -> None:
+    """Descarta sesiones tan viejas que ya no pueden estar en conversación.
+
+    El tope respeta el TTL largo de `humano`: una conversación con la
+    manicurista sigue viva 12 h aunque el TTL corto sea de 30 min.
+    """
+    tope = reloj.ahora() - timedelta(
+        minutes=max(config.SESION_TTL_MIN * 8, config.SESION_HUMANO_TTL_MIN)
+    )
+    for sid in [k for k, v in SESIONES.items() if v.ultima_actividad < tope]:
+        SESIONES.pop(sid, None)
 
 
 # ---------- respuestas ----------
@@ -122,7 +140,7 @@ def slots_disponibles(
     if excluir_folio:
         # Al reagendar, su propio horario no debe bloquearse a sí mismo.
         citas = [c for c in citas if c["folio"] != excluir_folio]
-    return horarios.generar_slots(datos, servicio_id, citas, ahora or datetime.now())
+    return horarios.generar_slots(datos, servicio_id, citas, ahora or reloj.ahora())
 
 
 def _etiqueta_slot(iso: str) -> str:
@@ -160,44 +178,131 @@ def _fuera_de_ventana(cita: dict[str, Any], datos: dict[str, Any]) -> bool:
         inicio = datetime.fromisoformat(cita["slot"])
     except ValueError:
         return False
-    return inicio - datetime.now() < timedelta(hours=horas)
+    return inicio - reloj.ahora() < timedelta(hours=horas)
 
 
 # ---------- flujo ----------
-async def manejar(sid: str, texto: str, datos: dict[str, Any]) -> tuple[list[dict[str, Any]], Sesion]:
+def _hace_una_hora() -> str:
+    """Marca ISO de hace una hora, para la ventana del tope por hora."""
+    return (reloj.ahora() - timedelta(hours=1)).isoformat(timespec="seconds")
+
+
+def _hoy_iso() -> str:
+    """Marca ISO de la medianoche de hoy (hora del negocio)."""
+    return reloj.ahora().replace(hour=0, minute=0, second=0, microsecond=0).isoformat(
+        timespec="seconds"
+    )
+
+
+def _limite_wa(s: Sesion, datos: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """None si el mensaje puede pasar; si no, la respuesta de bloqueo.
+
+    El mensaje bloqueado no se anota en `wa_uso`: se suma solo al pasar, para
+    que el tope no se dispare a sí mismo.
+    """
+    tel = _t10(s.telefono)
+    if config.WA_ALLOWLIST and tel not in config.WA_ALLOWLIST:
+        return [_t(f"Por ahora no puedo atender este número. Marca al {datos['telefono']} "
+                   "y con gusto te ayudamos.")]
+    ahora = reloj.ahora()
+    if store.wa_contar_desde(_hace_una_hora(), tel) >= config.WA_MAX_POR_HORA:
+        return [_t("Me llegaron muchos mensajes seguidos. Espera unos minutos y seguimos.")]
+    if (store.wa_contar_desde(_hoy_iso(), tel) >= config.WA_MAX_POR_DIA
+            or store.wa_contar_desde(_hoy_iso()) >= config.WA_MAX_GLOBAL_POR_DIA):
+        return [_t("Hoy ya no alcanzo a contestar más por este medio. Escríbeme mañana "
+                   f"o marca al {datos['telefono']}.")]
+    store.wa_sumar(tel, ahora.isoformat(timespec="seconds"))
+    return None
+
+
+async def manejar(
+    sid: str,
+    texto: str,
+    datos: dict[str, Any],
+    canal: str = "web",
+    telefono: str = "",
+) -> tuple[list[dict[str, Any]], Sesion]:
     s = SESIONES.get(sid) or Sesion(sid)
     SESIONES[sid] = s
+    if canal != "web":
+        s.canal = canal
+    if telefono:
+        s.telefono = telefono
+
+    ahora = reloj.ahora()
+    inactivo = ahora - s.ultima_actividad
+    if inactivo > timedelta(minutes=config.SESION_TTL_MIN):
+        # Conversación nueva: contador nuevo y, salvo que esté en manos de la
+        # manicurista, se retoma desde el menú.
+        s.mensajes = 0
+        if s.paso not in ("inicio", "humano"):
+            s.paso, s.servicio_id, s.slot, s.folio, s.nombre = "inicio", None, None, None, ""
+    if s.paso == "humano" and inactivo > timedelta(minutes=config.SESION_HUMANO_TTL_MIN):
+        # El TTL corto no reinicia `humano`: el bot no habla encima del barbero.
+        s.paso, s.handoff = "inicio", False
+
+    s.ultima_actividad = ahora
     s.mensajes += 1
+    _purgar_sesiones()
     txt = _norm(texto)
 
-    # presupuesto duro
-    if USO_DIA["fecha"] != datetime.now().date():
-        USO_DIA.update(fecha=datetime.now().date(), n=0)
-    USO_DIA["n"] += 1
-    if s.mensajes > config.MAX_MENSAJES_POR_SESION:
-        # Un visitante que explora FAQ + agendar + cancelar ronda los 25 mensajes.
-        return [_t("Esta sesión de demo llegó a su tope de mensajes. Recarga la página para "
-                   f"empezar otra, o escríbeme directo: {datos['telefono']}.")], s
-    if USO_DIA["n"] > config.MAX_MENSAJES_POR_DIA:
-        return [_t("La demo llegó a su límite de mensajes por hoy. Escríbeme directo y seguimos: "
-                   f"{datos['telefono']}.")], s
+    # 1. Gate de sesión primero: un mensaje bloqueado no gasta nada.
+    if s.canal == "wa":
+        if s.mensajes > config.MAX_MENSAJES_POR_SESION_WA:
+            return [_t("En esta conversación ya van muchos mensajes. Escríbeme mañana y seguimos.")], s
+        # 2. Gates del canal WhatsApp: allowlist, por hora, por día y global.
+        #    `wa_sumar` solo se llama si el mensaje pasa.
+        bloqueo = _limite_wa(s, datos)
+        if bloqueo is not None:
+            return bloqueo, s
+    else:
+        if s.mensajes > config.MAX_MENSAJES_POR_SESION:
+            # Un visitante que explora FAQ + agendar + cancelar ronda los 25 mensajes.
+            return [_t("Esta sesión de demo llegó a su tope de mensajes. Recarga la página para "
+                       f"empezar otra, o escríbeme directo: {datos['telefono']}.")], s
+        # 3. Recién ahora el presupuesto global: los bloqueados no lo consumen.
+        if USO_DIA["fecha"] != ahora.date():
+            USO_DIA.update(fecha=ahora.date(), n=0)
+        USO_DIA["n"] += 1
+        if USO_DIA["n"] > config.MAX_MENSAJES_POR_DIA:
+            return [_t("La demo llegó a su límite de mensajes por hoy. Escríbeme directo y seguimos: "
+                       f"{datos['telefono']}.")], s
 
+    return await _flujo(s, texto, txt, datos)
+
+
+async def _flujo(
+    s: Sesion, texto: str, txt: str, datos: dict[str, Any]
+) -> tuple[list[dict[str, Any]], Sesion]:
+    """Salidas globales y pasos de la conversación, ya pasados los topes."""
     # salidas globales
     if txt in {"menu", "inicio", "hola", "buenas", "buenos dias", "buenas tardes", "hey", "que tal"}:
         s.paso = "inicio"
+        s.handoff = False
         return bienvenida(datos), s
 
     if _es_handoff(txt):
         s.handoff = True
         s.paso = "humano"
+        # El motor registra el KPI y avisa en el mismo punto: el flag queda
+        # activo mientras la conversación esté en manos de la manicurista.
+        store.registrar_handoff(s.sid, texto)
+        # La red va en otro hilo: Telegram no debe bloquear el event loop.
+        await asyncio.to_thread(avisos.notificar_handoff, s.sid, s.telefono, texto)
         return [_t("Listo, le paso tu conversación a la manicurista y te contesta en cuanto termine con su clienta. "
                    f"Si urge, marca al {datos['telefono']}."),
                 _b("¿Algo más mientras?", MENU)], s
 
+    # Silencio del bot mientras la conversación está en manos de la manicurista.
+    # Va después de la salida global de "menu" (que está arriba) para que el
+    # cliente siempre pueda recuperar al bot.
+    if s.canal == "wa" and s.paso == "humano" and txt != "menu":
+        return [], s
+
     # atajos con folio: "cancelar AMB-7K4Q", "mover AMB-7K4Q"
     folio_dicho = _folio_de(texto)
     if folio_dicho and _es_cancelar(txt):
-        return _cancelar_folio(s, folio_dicho, datos)
+        return await _cancelar_folio(s, folio_dicho, datos)
     if folio_dicho and _es_reagendar(txt):
         return _empezar_reagendar(s, folio_dicho, datos)
     if folio_dicho:
@@ -215,13 +320,13 @@ async def manejar(sid: str, texto: str, datos: dict[str, Any]) -> tuple[list[dic
     if s.paso == "agendar_slot":
         return _paso_slot(s, txt, texto, datos)
     if s.paso == "agendar_nombre":
-        return _paso_nombre(s, texto, datos)
+        return await _paso_nombre(s, texto, datos)
     if s.paso == "citas_folio":
         return _paso_citas_folio(s, texto, datos)
     if s.paso == "citas_accion":
-        return _paso_citas_accion(s, txt, texto, datos)
+        return await _paso_citas_accion(s, txt, texto, datos)
     if s.paso == "citas_slot":
-        return _paso_citas_slot(s, txt, texto, datos)
+        return await _paso_citas_slot(s, txt, texto, datos)
 
     s.paso = "inicio"
     return bienvenida(datos), s
@@ -302,14 +407,14 @@ def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     return [_t("Apartado. ¿A nombre de quién queda?")], s
 
 
-def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
+async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     nombre = texto.strip()[:60]
     if len(nombre) < 2:
         return [_t("Dame un nombre para la cita, por favor.")], s
     sid = s.servicio_id or ""
     slot = s.slot or ""
 
-    ok, motivo = horarios.validar(datos, sid, slot, store.confirmadas(), datetime.now())
+    ok, motivo = horarios.validar(datos, sid, slot, store.confirmadas(), reloj.ahora())
     if not ok:
         s.paso = "agendar_slot"
         libres = slots_disponibles(datos, sid)
@@ -324,7 +429,7 @@ def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
         return [_b("Justo alguien más tomó ese horario. Elige otro:",
                    [(i, _etiqueta_slot(i)) for i in libres[:8]])], s
 
-    event_id = calendar_sync.crear(cita, datos)
+    event_id = await asyncio.to_thread(calendar_sync.crear, cita, datos)
     if event_id:
         store.set_evento(cita["folio"], event_id)
 
@@ -342,9 +447,18 @@ def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
 
 
 # ---------- cancelar / reagendar ----------
+def _folio_autorizado(s: Sesion, cita: dict[str, Any] | None) -> bool:
+    """En WhatsApp el folio solo abre la cita del mismo teléfono."""
+    if s.canal != "wa" or not cita:
+        return True
+    return _t10(cita.get("telefono", "")) == _t10(s.telefono)
+
+
 def _paso_citas_folio(s: Sesion, texto: str, datos: dict[str, Any]):
     folio = _folio_de(texto) or (texto.strip().upper() if texto.strip() else "")
     cita = store.obtener(folio) if folio else None
+    if not _folio_autorizado(s, cita):
+        cita = None            # a partir de aquí se comporta como "no existe"
     if not cita:
         return [_t("No encuentro ninguna cita con ese folio. Revísalo en tu confirmación (tipo AMB-7K4Q).")], s
     if cita["estado"] == "cancelada":
@@ -364,9 +478,9 @@ def _paso_citas_folio(s: Sesion, texto: str, datos: dict[str, Any]):
                                        ("menu", "Nada, gracias")])], s
 
 
-def _paso_citas_accion(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
+async def _paso_citas_accion(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     if txt in {"cancelar", "cancela", "anular", "anula"} or _es_cancelar(txt):
-        return _cancelar_folio(s, s.folio or "", datos)
+        return await _cancelar_folio(s, s.folio or "", datos)
     if txt in {"reagendar", "mover", "cambiar"} or _es_reagendar(txt):
         return _empezar_reagendar(s, s.folio or "", datos)
     if txt in {"menu", "nada", "no"}:
@@ -377,8 +491,10 @@ def _paso_citas_accion(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
                                        ("menu", "Nada, gracias")])], s
 
 
-def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
+async def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
     cita = store.obtener(folio)
+    if not _folio_autorizado(s, cita):
+        cita = None            # a partir de aquí se comporta como "no existe"
     if not cita or cita["estado"] == "cancelada":
         s.paso = "inicio"
         return [_t("Ese folio no tiene una cita activa. ¿Te ayudo con otra cosa?"),
@@ -392,7 +508,7 @@ def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
                    f"Si urge, marca al {datos['telefono']}.")], s
 
     cita = store.cancelar(folio)
-    calendar_sync.borrar(cita.get("calendar_event_id"))
+    await asyncio.to_thread(calendar_sync.borrar, cita.get("calendar_event_id"))
     store.set_evento(cita["folio"], None)
     s.folio = None
     s.paso = "fin"
@@ -404,6 +520,8 @@ def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
 
 def _empezar_reagendar(s: Sesion, folio: str, datos: dict[str, Any]):
     cita = store.obtener(folio)
+    if not _folio_autorizado(s, cita):
+        cita = None            # a partir de aquí se comporta como "no existe"
     if not cita or cita["estado"] == "cancelada":
         s.paso = "inicio"
         return [_t("Ese folio no tiene una cita activa. ¿Te ayudo con otra cosa?"),
@@ -429,7 +547,7 @@ def _empezar_reagendar(s: Sesion, folio: str, datos: dict[str, Any]):
                [("menu", "Mejor la dejo así")])], s
 
 
-def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
+async def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     folio = s.folio or ""
     cita = store.obtener(folio)
     if not cita or cita["estado"] == "cancelada":
@@ -461,7 +579,7 @@ def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
         s.paso = "inicio"
         return [_t("Esa cita ya no está activa."), _b("Menú:", MENU)], s
 
-    event_id = calendar_sync.mover(cita.get("calendar_event_id"), nueva, datos)
+    event_id = await asyncio.to_thread(calendar_sync.mover, cita.get("calendar_event_id"), nueva, datos)
     if event_id and event_id != cita.get("calendar_event_id"):
         store.set_evento(folio, event_id)
 
