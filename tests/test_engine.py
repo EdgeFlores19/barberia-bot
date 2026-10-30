@@ -12,6 +12,8 @@ import pytest
 
 from app import config, engine, reloj, store
 
+from tests.telefonos import TEL_A
+
 CODIGO_SLOT = "%Y-%m-%dT%H:%M"
 
 
@@ -179,3 +181,55 @@ def test_reset_vacia_la_agenda(datos):
     store.reset()
     assert store.listar() == []
     assert store.ocupados() == set()
+
+
+# ---------- Tarea 12: canal, teléfono y expiración de sesión ----------
+def test_canal_y_telefono_se_guardan_en_la_sesion(datos):
+    resp, s = asyncio.run(engine.manejar("s1", "hola", datos, canal="wa", telefono=TEL_A))
+
+    assert s.canal == "wa"
+    assert s.telefono == TEL_A
+    assert resp
+
+
+def test_ttl_reinicia_el_paso_a_inicio(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
+    engine.SESIONES["s2"] = engine.Sesion("s2", paso="agendar_servicio", servicio_id="manicura")
+    engine.SESIONES["s2"].ultima_actividad = reloj.ahora() - timedelta(minutes=31)
+
+    resp, s = asyncio.run(engine.manejar("s2", "hola", datos))
+
+    assert s.paso == "inicio"
+    assert s.servicio_id is None
+    assert resp
+
+
+def test_ttl_no_reinicia_dentro_del_limite(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
+    engine.SESIONES["s3"] = engine.Sesion("s3", paso="agendar_servicio", servicio_id="manicura")
+    engine.SESIONES["s3"].ultima_actividad = reloj.ahora() - timedelta(minutes=5)
+
+    asyncio.run(engine.manejar("s3", "manicura", datos))
+
+    assert engine.SESIONES["s3"].paso != "inicio"
+
+
+def test_ultima_actividad_se_actualiza_en_cada_mensaje(datos):
+    s = engine.SESIONES["s4"] = engine.Sesion("s4", paso="agendar_servicio", servicio_id="manicura")
+    s.ultima_actividad = reloj.ahora() - timedelta(minutes=10)
+
+    asyncio.run(engine.manejar("s4", "manicura", datos))
+
+    assert reloj.ahora() - s.ultima_actividad < timedelta(seconds=5)
+
+
+def test_purga_elimina_sesiones_viejas(datos, monkeypatch):
+    monkeypatch.setattr(config, "SESION_TTL_MIN", 30)
+    engine.SESIONES.clear()
+    engine.SESIONES["vieja"] = engine.Sesion("vieja")
+    engine.SESIONES["vieja"].ultima_actividad = reloj.ahora() - timedelta(hours=5)
+
+    asyncio.run(engine.manejar("nueva", "hola", datos))
+
+    assert "vieja" not in engine.SESIONES
+

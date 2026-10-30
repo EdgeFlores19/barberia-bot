@@ -44,10 +44,20 @@ class Sesion:
     handoff: bool = False
     resuelta: bool = False
     historial: list[dict[str, str]] = field(default_factory=list)
+    canal: str = "web"                      # "web" | "wa"
+    telefono: str = ""                      # tal como lo manda el canal
+    ultima_actividad: datetime = field(default_factory=reloj.ahora)
 
 
 SESIONES: dict[str, Sesion] = {}
 USO_DIA = {"fecha": reloj.ahora().date(), "n": 0}
+
+
+def _purgar_sesiones() -> None:
+    """Descarta sesiones tan viejas que ya no pueden estar en conversación."""
+    tope = reloj.ahora() - timedelta(minutes=config.SESION_TTL_MIN * 8)
+    for sid in [k for k, v in SESIONES.items() if v.ultima_actividad < tope]:
+        SESIONES.pop(sid, None)
 
 
 # ---------- respuestas ----------
@@ -164,10 +174,27 @@ def _fuera_de_ventana(cita: dict[str, Any], datos: dict[str, Any]) -> bool:
 
 
 # ---------- flujo ----------
-async def manejar(sid: str, texto: str, datos: dict[str, Any]) -> tuple[list[dict[str, Any]], Sesion]:
+async def manejar(
+    sid: str,
+    texto: str,
+    datos: dict[str, Any],
+    canal: str = "web",
+    telefono: str = "",
+) -> tuple[list[dict[str, Any]], Sesion]:
     s = SESIONES.get(sid) or Sesion(sid)
     SESIONES[sid] = s
+    if canal != "web":
+        s.canal = canal
+    if telefono:
+        s.telefono = telefono
+
+    # TTL: el cliente volvió después de mucho; se retoma desde el menú.
+    if s.paso != "inicio" and reloj.ahora() - s.ultima_actividad > timedelta(minutes=config.SESION_TTL_MIN):
+        s.paso, s.servicio_id, s.slot, s.folio, s.nombre = "inicio", None, None, None, ""
+
+    s.ultima_actividad = reloj.ahora()
     s.mensajes += 1
+    _purgar_sesiones()
     txt = _norm(texto)
 
     # presupuesto duro
