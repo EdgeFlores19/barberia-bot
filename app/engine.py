@@ -228,14 +228,17 @@ async def manejar(
     # salidas globales
     if txt in {"menu", "inicio", "hola", "buenas", "buenos dias", "buenas tardes", "hey", "que tal"}:
         s.paso = "inicio"
+        s.handoff = False
         return bienvenida(datos), s
 
     if _es_handoff(txt):
         s.handoff = True
         s.paso = "humano"
+        # El motor registra el KPI y avisa en el mismo punto: el flag queda
+        # activo mientras la conversación esté en manos de la manicurista.
+        store.registrar_handoff(sid, texto)
         # La red va en otro hilo: Telegram no debe bloquear el event loop.
         await asyncio.to_thread(avisos.notificar_handoff, sid, s.telefono, texto)
-        s.handoff = False
         return [_t("Listo, le paso tu conversación a la manicurista y te contesta en cuanto termine con su clienta. "
                    f"Si urge, marca al {datos['telefono']}."),
                 _b("¿Algo más mientras?", MENU)], s

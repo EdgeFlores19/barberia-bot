@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -16,23 +15,16 @@ from tests.telefonos import TEL_A, TEL_A_SIN_1, TEL_B
 
 CODIGO_SLOT = "%Y-%m-%dT%H:%M"
 
+# Toda prueba del archivo usa la base temporal de tests/conftest.py: una sola
+# definición de la fixture `bd` para todo el repo.
+pytestmark = pytest.mark.usefixtures("bd")
+
 
 @pytest.fixture()
 def datos() -> dict:
     d = engine.cargar_datos()
     assert d["servicios"], "el JSON debe traer servicios"
     return d
-
-
-@pytest.fixture(autouse=True)
-def bd_temporal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Cada prueba usa su propia base y arranca vacía."""
-    monkeypatch.setattr(config, "DB_FILE", tmp_path / "test.db")
-    monkeypatch.setattr(store, "_inicializada", False)
-    store.init()
-    engine.SESIONES.clear()
-    yield
-    store.reset()
 
 
 def _enviar(sid: str, texto: str, datos: dict):
@@ -307,8 +299,13 @@ def test_ttl_reinicia_el_contador_de_mensajes(datos, monkeypatch):
     assert engine.SESIONES["s7"].mensajes == 1
 
 
-# ---------- Tarea 14: handoff que avisa y silencia el canal wa ----------
-def test_handoff_avisa_y_resetea_el_flag(datos, monkeypatch):
+# ---------- C10: el handoff registra, avisa y deja el flag activo ----------
+def _contar_handoffs() -> int:
+    with store._con() as con:
+        return con.execute("SELECT COUNT(*) FROM handoffs").fetchone()[0]
+
+
+def test_handoff_registra_avisa_y_deja_el_flag_activo(datos, bd, monkeypatch):
     avisos_enviados = []
     monkeypatch.setattr(engine.avisos, "notificar_handoff",
                         lambda sid, tel, msg: avisos_enviados.append((sid, tel, msg)))
@@ -316,34 +313,43 @@ def test_handoff_avisa_y_resetea_el_flag(datos, monkeypatch):
     asyncio.run(engine.manejar("h1", "quiero hablar con una persona", datos))
 
     assert len(avisos_enviados) == 1
-    assert engine.SESIONES["h1"].handoff is False
+    assert _contar_handoffs() == 1
+    assert engine.SESIONES["h1"].handoff is True
     assert engine.SESIONES["h1"].paso == "humano"
 
 
-def test_handoff_se_registra_dos_veces_en_la_misma_sesion(datos, monkeypatch):
+def test_menu_devuelve_al_bot_y_baja_el_flag(datos, bd, monkeypatch):
+    monkeypatch.setattr(engine.avisos, "notificar_handoff", lambda *a: None)
+
+    asyncio.run(engine.manejar("h2", "quiero hablar con una persona", datos))
+    asyncio.run(engine.manejar("h2", "menu", datos))
+
+    assert engine.SESIONES["h2"].handoff is False
+    assert engine.SESIONES["h2"].paso != "humano"
+
+
+def test_dos_handoffs_en_la_misma_sesion_avisan_dos_veces(datos, bd, monkeypatch):
     avisos_enviados = []
     monkeypatch.setattr(engine.avisos, "notificar_handoff",
                         lambda sid, tel, msg: avisos_enviados.append(sid))
 
-    asyncio.run(engine.manejar("h2", "quiero hablar con una persona", datos))
-    asyncio.run(engine.manejar("h2", "menu", datos))
-    asyncio.run(engine.manejar("h2", "quiero hablar con una persona", datos))
+    asyncio.run(engine.manejar("h3", "quiero hablar con una persona", datos))
+    asyncio.run(engine.manejar("h3", "menu", datos))
+    asyncio.run(engine.manejar("h3", "quiero hablar con una persona", datos))
 
     assert len(avisos_enviados) == 2
+    assert _contar_handoffs() == 2
 
 
-def test_en_humano_el_bot_calla_salvo_menu(datos, monkeypatch):
+def test_en_humano_el_bot_calla_salvo_menu(datos, bd, monkeypatch):
     monkeypatch.setattr(engine.avisos, "notificar_handoff", lambda *a: None)
-
-    asyncio.run(engine.manejar("h3", "quiero hablar con una persona", datos,
+    asyncio.run(engine.manejar("h4", "quiero hablar con una persona", datos,
                                canal="wa", telefono=TEL_A))
 
-    resp, _ = asyncio.run(engine.manejar("h3", "¿hola?", datos,
-                                         canal="wa", telefono=TEL_A))
+    resp, _ = asyncio.run(engine.manejar("h4", "¿hola?", datos, canal="wa", telefono=TEL_A))
     assert resp == []
 
-    resp, _ = asyncio.run(engine.manejar("h3", "menu", datos,
-                                         canal="wa", telefono=TEL_A))
+    resp, _ = asyncio.run(engine.manejar("h4", "menu", datos, canal="wa", telefono=TEL_A))
     assert resp
 
 
