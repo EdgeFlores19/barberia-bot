@@ -250,6 +250,17 @@ def test_wa_no_cancela_cita_de_otro_telefono(datos):
     assert ajena == inexistente
 
 
+def test_wa_folio_ajeno_responde_igual_que_folio_inexistente(datos):
+    """C9.3: un folio ajeno no se distingue de uno inexistente."""
+    cita = _cita_ajena(datos)
+    ajeno, _ = asyncio.run(engine.manejar("w5", f"cancelar {cita['folio']}", datos,
+                                          canal="wa", telefono=TEL_A))
+    inexistente, _ = asyncio.run(engine.manejar("w6", "cancelar AMB-ZZZZ", datos,
+                                                canal="wa", telefono=TEL_A))
+
+    assert ajeno == inexistente
+
+
 def test_wa_cancela_su_propia_cita_aunque_llegue_con_521(datos):
     cita = _cita_ajena(datos, TEL_A)
 
