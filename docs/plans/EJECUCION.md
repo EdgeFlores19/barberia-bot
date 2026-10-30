@@ -47,6 +47,9 @@ Si algo del plan no coincide con el código real, **detente y repórtalo**; no i
 - Dependencia nueva autorizada: **solo `tzdata`**.
 - **No** hagas `git add -A`. Revisa `git status --short` y agrega por nombre. Nunca `*.db`, `.env`, `google_token.json`.
 - **No** hagas `git push` ni abras PR. El revisor lo decide.
+- Gate de secretos (los `.md` de `docs/plans/` citan `TELEGRAM_BOT_TOKEN=` vacío: se excluyen):
+  `git grep -nE "52(1)?449[0-9]{7}" -- . ':!*.example' ':!docs/plans/*'`
+  `git grep -n "TELEGRAM_BOT_TOKEN=" -- . ':!*.example' ':!docs/plans/*'`
 - Tests async con `asyncio.run(...)`: no hay `pytest-asyncio`.
 - Comandos (Windows, git-bash, desde la raíz): `.venv/Scripts/python.exe -m pytest tests/ -q --ignore=tests/smoke_test.py`
 - Si un conteo de tests no cuadra con el plan: **para y repórtalo**.
