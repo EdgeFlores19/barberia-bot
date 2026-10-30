@@ -5,6 +5,7 @@ La disponibilidad la calcula app/slots.py; las citas viven en app/store.py (SQLi
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import unicodedata
@@ -12,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from . import calendar_sync, config, llm, reloj, store
+from . import avisos, calendar_sync, config, llm, reloj, store
 from . import slots as horarios
 from .telefono import t10 as _t10
 
@@ -232,6 +233,9 @@ async def manejar(
     if _es_handoff(txt):
         s.handoff = True
         s.paso = "humano"
+        # La red va en otro hilo: Telegram no debe bloquear el event loop.
+        await asyncio.to_thread(avisos.notificar_handoff, sid, s.telefono, texto)
+        s.handoff = False
         return [_t("Listo, le paso tu conversación a la manicurista y te contesta en cuanto termine con su clienta. "
                    f"Si urge, marca al {datos['telefono']}."),
                 _b("¿Algo más mientras?", MENU)], s

@@ -307,3 +307,43 @@ def test_ttl_reinicia_el_contador_de_mensajes(datos, monkeypatch):
     assert engine.SESIONES["s7"].mensajes == 1
 
 
+# ---------- Tarea 14: handoff que avisa y silencia el canal wa ----------
+def test_handoff_avisa_y_resetea_el_flag(datos, monkeypatch):
+    avisos_enviados = []
+    monkeypatch.setattr(engine.avisos, "notificar_handoff",
+                        lambda sid, tel, msg: avisos_enviados.append((sid, tel, msg)))
+
+    asyncio.run(engine.manejar("h1", "quiero hablar con una persona", datos))
+
+    assert len(avisos_enviados) == 1
+    assert engine.SESIONES["h1"].handoff is False
+    assert engine.SESIONES["h1"].paso == "humano"
+
+
+def test_handoff_se_registra_dos_veces_en_la_misma_sesion(datos, monkeypatch):
+    avisos_enviados = []
+    monkeypatch.setattr(engine.avisos, "notificar_handoff",
+                        lambda sid, tel, msg: avisos_enviados.append(sid))
+
+    asyncio.run(engine.manejar("h2", "quiero hablar con una persona", datos))
+    asyncio.run(engine.manejar("h2", "menu", datos))
+    asyncio.run(engine.manejar("h2", "quiero hablar con una persona", datos))
+
+    assert len(avisos_enviados) == 2
+
+
+def test_en_humano_el_bot_calla_salvo_menu(datos, monkeypatch):
+    monkeypatch.setattr(engine.avisos, "notificar_handoff", lambda *a: None)
+
+    asyncio.run(engine.manejar("h3", "quiero hablar con una persona", datos,
+                               canal="wa", telefono=TEL_A))
+
+    resp, _ = asyncio.run(engine.manejar("h3", "¿hola?", datos,
+                                         canal="wa", telefono=TEL_A))
+    assert resp == []
+
+    resp, _ = asyncio.run(engine.manejar("h3", "menu", datos,
+                                         canal="wa", telefono=TEL_A))
+    assert resp
+
+
