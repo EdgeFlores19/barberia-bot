@@ -56,6 +56,14 @@ CREATE TABLE IF NOT EXISTS handoffs (
     mensaje  TEXT NOT NULL,
     creado   TEXT NOT NULL
 );
+
+-- Mensajes atendidos por el canal WhatsApp: topes por teléfono y global.
+CREATE TABLE IF NOT EXISTS wa_uso (
+    telefono TEXT NOT NULL,
+    momento  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_wa_uso_momento ON wa_uso (momento);
+CREATE INDEX IF NOT EXISTS ix_wa_uso_telefono_momento ON wa_uso (telefono, momento);
 """
 
 
@@ -243,3 +251,22 @@ def handoffs() -> list[dict[str, Any]]:
     init()
     with _con() as con:
         return [dict(f) for f in con.execute("SELECT * FROM handoffs ORDER BY id DESC").fetchall()]
+
+
+def wa_sumar(telefono: str, momento: str) -> None:
+    """Anota un mensaje atendido del canal WhatsApp (teléfono ya normalizado)."""
+    init()
+    with _candado, _con() as con:
+        con.execute("INSERT INTO wa_uso (telefono, momento) VALUES (?, ?)", (telefono, momento))
+
+
+def wa_contar_desde(desde: str, telefono: str | None = None) -> int:
+    """Mensajes atendidos desde `desde` (ISO). Sin teléfono cuenta todos."""
+    init()
+    sql = "SELECT COUNT(*) FROM wa_uso WHERE momento >= ?"
+    args: list[Any] = [desde]
+    if telefono:
+        sql += " AND telefono = ?"
+        args.append(telefono)
+    with _con() as con:
+        return con.execute(sql, args).fetchone()[0]

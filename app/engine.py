@@ -182,6 +182,39 @@ def _fuera_de_ventana(cita: dict[str, Any], datos: dict[str, Any]) -> bool:
 
 
 # ---------- flujo ----------
+def _hace_una_hora() -> str:
+    """Marca ISO de hace una hora, para la ventana del tope por hora."""
+    return (reloj.ahora() - timedelta(hours=1)).isoformat(timespec="seconds")
+
+
+def _hoy_iso() -> str:
+    """Marca ISO de la medianoche de hoy (hora del negocio)."""
+    return reloj.ahora().replace(hour=0, minute=0, second=0, microsecond=0).isoformat(
+        timespec="seconds"
+    )
+
+
+def _limite_wa(s: Sesion, datos: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """None si el mensaje puede pasar; si no, la respuesta de bloqueo.
+
+    El mensaje bloqueado no se anota en `wa_uso`: se suma solo al pasar, para
+    que el tope no se dispare a sí mismo.
+    """
+    tel = _t10(s.telefono)
+    if config.WA_ALLOWLIST and tel not in config.WA_ALLOWLIST:
+        return [_t(f"Por ahora no puedo atender este número. Marca al {datos['telefono']} "
+                   "y con gusto te ayudamos.")]
+    ahora = reloj.ahora()
+    if store.wa_contar_desde(_hace_una_hora(), tel) >= config.WA_MAX_POR_HORA:
+        return [_t("Me llegaron muchos mensajes seguidos. Espera unos minutos y seguimos.")]
+    if (store.wa_contar_desde(_hoy_iso(), tel) >= config.WA_MAX_POR_DIA
+            or store.wa_contar_desde(_hoy_iso()) >= config.WA_MAX_GLOBAL_POR_DIA):
+        return [_t("Hoy ya no alcanzo a contestar más por este medio. Escríbeme mañana "
+                   f"o marca al {datos['telefono']}.")]
+    store.wa_sumar(tel, ahora.isoformat(timespec="seconds"))
+    return None
+
+
 async def manejar(
     sid: str,
     texto: str,
@@ -213,18 +246,35 @@ async def manejar(
     _purgar_sesiones()
     txt = _norm(texto)
 
-    # presupuesto duro
-    if USO_DIA["fecha"] != reloj.ahora().date():
-        USO_DIA.update(fecha=reloj.ahora().date(), n=0)
-    USO_DIA["n"] += 1
-    if s.mensajes > config.MAX_MENSAJES_POR_SESION:
-        # Un visitante que explora FAQ + agendar + cancelar ronda los 25 mensajes.
-        return [_t("Esta sesión de demo llegó a su tope de mensajes. Recarga la página para "
-                   f"empezar otra, o escríbeme directo: {datos['telefono']}.")], s
-    if USO_DIA["n"] > config.MAX_MENSAJES_POR_DIA:
-        return [_t("La demo llegó a su límite de mensajes por hoy. Escríbeme directo y seguimos: "
-                   f"{datos['telefono']}.")], s
+    # 1. Gate de sesión primero: un mensaje bloqueado no gasta nada.
+    if s.canal == "wa":
+        if s.mensajes > config.MAX_MENSAJES_POR_SESION_WA:
+            return [_t("En esta conversación ya van muchos mensajes. Escríbeme mañana y seguimos.")], s
+        # 2. Gates del canal WhatsApp: allowlist, por hora, por día y global.
+        #    `wa_sumar` solo se llama si el mensaje pasa.
+        bloqueo = _limite_wa(s, datos)
+        if bloqueo is not None:
+            return bloqueo, s
+    else:
+        if s.mensajes > config.MAX_MENSAJES_POR_SESION:
+            # Un visitante que explora FAQ + agendar + cancelar ronda los 25 mensajes.
+            return [_t("Esta sesión de demo llegó a su tope de mensajes. Recarga la página para "
+                       f"empezar otra, o escríbeme directo: {datos['telefono']}.")], s
+        # 3. Recién ahora el presupuesto global: los bloqueados no lo consumen.
+        if USO_DIA["fecha"] != ahora.date():
+            USO_DIA.update(fecha=ahora.date(), n=0)
+        USO_DIA["n"] += 1
+        if USO_DIA["n"] > config.MAX_MENSAJES_POR_DIA:
+            return [_t("La demo llegó a su límite de mensajes por hoy. Escríbeme directo y seguimos: "
+                       f"{datos['telefono']}.")], s
 
+    return await _flujo(s, texto, txt, datos)
+
+
+async def _flujo(
+    s: Sesion, texto: str, txt: str, datos: dict[str, Any]
+) -> tuple[list[dict[str, Any]], Sesion]:
+    """Salidas globales y pasos de la conversación, ya pasados los topes."""
     # salidas globales
     if txt in {"menu", "inicio", "hola", "buenas", "buenos dias", "buenas tardes", "hey", "que tal"}:
         s.paso = "inicio"
@@ -236,9 +286,9 @@ async def manejar(
         s.paso = "humano"
         # El motor registra el KPI y avisa en el mismo punto: el flag queda
         # activo mientras la conversación esté en manos de la manicurista.
-        store.registrar_handoff(sid, texto)
+        store.registrar_handoff(s.sid, texto)
         # La red va en otro hilo: Telegram no debe bloquear el event loop.
-        await asyncio.to_thread(avisos.notificar_handoff, sid, s.telefono, texto)
+        await asyncio.to_thread(avisos.notificar_handoff, s.sid, s.telefono, texto)
         return [_t("Listo, le paso tu conversación a la manicurista y te contesta en cuanto termine con su clienta. "
                    f"Si urge, marca al {datos['telefono']}."),
                 _b("¿Algo más mientras?", MENU)], s
