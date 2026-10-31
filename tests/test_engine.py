@@ -150,7 +150,8 @@ def test_slot_ocupado_desaparece_de_las_opciones(datos):
 
 def test_reagendar_tarde_pide_a_la_manicurista(datos):
     """Menos de 2 h antes: no cancela sola, hace handoff."""
-    inicio = datetime.now() + timedelta(minutes=45)
+    # Hora del negocio (no la del equipo): en UTC, datetime.now() adelanta 6 h al motor.
+    inicio = reloj.ahora() + timedelta(minutes=45)
     cita = store.crear(inicio.strftime(CODIGO_SLOT), "manicura", "Tarde")
     resp, sesion = _enviar("s1", f"cancelar {cita['folio']}", datos)
     assert sesion.handoff is True
