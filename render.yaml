@@ -6,9 +6,10 @@ services:
     runtime: python
     plan: free
     region: oregon
-    # Desplegar en cada push a la rama de producción. Sin esto, Render no
-    # redespliega solo y el código de main se queda viejo en producción.
-    autoDeploy: true
+    # Desplegar al hacer push a la rama de producción, pero solo si el CI (GitHub
+    # Actions, workflow "tests") salió en verde. `autoDeploy: true` es el nombre
+    # obsoleto y desplegaba aunque las pruebas fallaran.
+    autoDeployTrigger: checksPass
     buildCommand: pip install -r requirements.txt
     # Render inyecta $PORT; uvicorn debe escuchar en 0.0.0.0 para ser alcanzable.
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
@@ -20,6 +21,10 @@ services:
         sync: false # se captura en el panel, nunca en el repo
       - key: DEEPSEEK_API_KEY
         sync: false
+      # Clave para firmar los sid del chat web. Render la genera una vez y la conserva;
+      # sin ella, cada reinicio invalidaría las sesiones abiertas.
+      - key: SESSION_SECRET
+        generateValue: true
       - key: MAX_MENSAJES_POR_SESION
         value: 30
       - key: MAX_MENSAJES_POR_DIA

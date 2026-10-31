@@ -1,11 +1,16 @@
 """Fixtures compartidas para los tests del canal WhatsApp."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
-from app import config, engine, store
+# app.main no arranca sin DEMO_CODE: valor de pruebas si el entorno no trae uno.
+# Va antes de importar `app`, que lee el entorno al importarse.
+os.environ.setdefault("DEMO_CODE", "codigo-de-pruebas")
+
+from app import config, engine, store  # noqa: E402
 
 
 @pytest.fixture()

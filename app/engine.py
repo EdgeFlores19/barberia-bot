@@ -49,6 +49,7 @@ class Sesion:
     canal: str = "web"                      # "web" | "wa"
     telefono: str = ""                      # tal como lo manda el canal
     ultima_actividad: datetime = field(default_factory=reloj.ahora)
+    handoff_avisado: bool = False           # ya se avisó a la manicurista en este handoff
 
 
 SESIONES: dict[str, Sesion] = {}
@@ -66,6 +67,19 @@ def _purgar_sesiones() -> None:
     )
     for sid in [k for k, v in SESIONES.items() if v.ultima_actividad < tope]:
         SESIONES.pop(sid, None)
+
+
+def recortar_sesiones(maximo: int) -> None:
+    """Deja como mucho `maximo` sesiones, desalojando las más inactivas del chat web.
+
+    Las de WhatsApp no se tocan: pueden estar en manos de la manicurista (TTL de 12 h).
+    """
+    exceso = len(SESIONES) - maximo
+    if exceso <= 0:
+        return
+    web = sorted((x for x in SESIONES.values() if x.canal == "web"), key=lambda x: x.ultima_actividad)
+    for x in web[:exceso]:
+        SESIONES.pop(x.sid, None)
 
 
 # ---------- respuestas ----------
@@ -268,7 +282,28 @@ async def manejar(
             return [_t("La demo llegó a su límite de mensajes por hoy. Escríbeme directo y seguimos: "
                        f"{datos['telefono']}.")], s
 
-    return await _flujo(s, texto, txt, datos)
+    respuestas, s = await _flujo(s, texto, txt, datos)
+    await _avisar_handoff(s, texto)
+    return respuestas, s
+
+
+async def _avisar_handoff(s: Sesion, texto: str) -> None:
+    """Registra el handoff y avisa al dueño UNA vez por handoff, venga de donde venga.
+
+    Antes solo avisaba la rama de "humano"/"persona". Pasar a la manicurista por una
+    cancelación fuera de ventana, por falta de huecos o por la opción 5 le decía al
+    cliente "ya le pasé tu conversación" sin avisarle a nadie; y repetir "humano"
+    mandaba un Telegram por cada mensaje.
+    """
+    if not s.handoff:
+        s.handoff_avisado = False      # volvió al bot: el siguiente handoff avisa de nuevo
+        return
+    if s.handoff_avisado:
+        return
+    s.handoff_avisado = True
+    store.registrar_handoff(s.sid, texto)
+    # La red va en otro hilo: Telegram no debe bloquear el event loop.
+    await asyncio.to_thread(avisos.notificar_handoff, s.sid, s.telefono, texto)
 
 
 async def _flujo(
@@ -284,11 +319,8 @@ async def _flujo(
     if _es_handoff(txt):
         s.handoff = True
         s.paso = "humano"
-        # El motor registra el KPI y avisa en el mismo punto: el flag queda
-        # activo mientras la conversación esté en manos de la manicurista.
-        store.registrar_handoff(s.sid, texto)
-        # La red va en otro hilo: Telegram no debe bloquear el event loop.
-        await asyncio.to_thread(avisos.notificar_handoff, s.sid, s.telefono, texto)
+        # El registro del KPI y el aviso al dueño los hace `manejar` (_avisar_handoff),
+        # una sola vez por handoff, sin importar por qué camino se llegó aquí.
         return [_t("Listo, le paso tu conversación a la manicurista y te contesta en cuanto termine con su clienta. "
                    f"Si urge, marca al {datos['telefono']}."),
                 _b("¿Algo más mientras?", MENU)], s
@@ -422,7 +454,10 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
                    [(i, _etiqueta_slot(i)) for i in libres[:8]])], s
 
     try:
-        cita = store.crear(slot, sid, nombre)
+        # En WhatsApp la cita queda ligada al teléfono: sin esto, el candado de folio
+        # (`_folio_autorizado`) no deja al propio cliente cancelar ni mover su cita.
+        tel = s.telefono if s.canal == "wa" else ""
+        cita = store.crear(slot, sid, nombre, tel)
     except store.SlotOcupado:
         s.paso = "agendar_slot"
         libres = slots_disponibles(datos, sid)

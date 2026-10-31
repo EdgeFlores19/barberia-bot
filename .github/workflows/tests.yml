@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DEMO_CODE: ambar
+      # El smoke test llama a GET /api/citas, que exige el token (sin él responde 503).
+      ADMIN_TOKEN: ci-admin-token
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
