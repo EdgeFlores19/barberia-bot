@@ -2,8 +2,7 @@
 
 [![tests](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml)
 
-**Demo en vivo:** <https://navajazo-bot.onrender.com> · código de acceso `navajazo`
-(es el valor de `DEMO_CODE` en el panel de Render; en local el default es `ambar`)
+**Demo en vivo:** <https://navajazo-bot.onrender.com> · el código de acceso se da bajo petición
 *(plan free: si estuvo dormida, la primera carga tarda ~50 s)*
 
 Asistente conversacional para un estudio de uñas en Aguascalientes: responde preguntas frecuentes, agenda citas
@@ -65,12 +64,12 @@ Híbrido, con el LLM en un carril estrecho:
 ```bash
 python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt      # Linux/macOS: .venv/bin/pip
-cp .env.example .env                               # opcional: clave DeepSeek
-.venv/Scripts/python -m uvicorn app.main:app --reload --port 8077
+cp .env.example .env                               # pon tu DEMO_CODE (obligatorio); DeepSeek es opcional
+.venv/Scripts/python -m uvicorn app.main:app --reload --port 8077 --env-file .env
 ```
 
-Abre <http://127.0.0.1:8077> y usa el código de acceso `ambar` (default de `DEMO_CODE` en
-`.env.example`; en Render el valor vive en el panel y hoy es `navajazo`).
+Abre <http://127.0.0.1:8077> y usa el código que pusiste en `DEMO_CODE` dentro de `.env`.
+El servidor no arranca sin él (solo para desarrollo local: `ALLOW_OPEN_DEMO=1`).
 La primera vez siembra dos citas de ejemplo (`SEED_DEMO=0` lo desactiva).
 
 ### Pruebas
@@ -133,7 +132,8 @@ en el repo:
 
 | Variable | Valor |
 |---|---|
-| `DEMO_CODE` | código de acceso de la demo |
+| `DEMO_CODE` | código de acceso de la demo (obligatorio, sin valor por defecto) |
+| `SESSION_SECRET` | lo genera Render (`generateValue`); firma los sid del chat web |
 | `DEEPSEEK_API_KEY` | key dedicada con saldo bajo |
 | `MAX_MENSAJES_POR_SESION` | `30` |
 | `MAX_MENSAJES_POR_DIA` | `600` |

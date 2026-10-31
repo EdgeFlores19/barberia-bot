@@ -16,8 +16,11 @@ DB_FILE = Path(os.getenv("DB_FILE", str(BASE_DIR / "barberia.db")))
 # En el plan free de Render el disco se reinicia junto con el servicio.
 SEED_DEMO = os.getenv("SEED_DEMO", "1").strip().lower() not in {"0", "false", "no", ""}
 
-# Acceso a la demo
-DEMO_CODE = os.getenv("DEMO_CODE", "ambar")
+# Acceso a la demo. SIN valor por defecto: uno público (estaba en el repo) dejaba la demo
+# abierta si la variable faltaba en Render. app/main.py no arranca sin él.
+DEMO_CODE = os.getenv("DEMO_CODE", "").strip()
+# Solo desarrollo local: permite arrancar sin DEMO_CODE (chat web abierto a cualquiera).
+ALLOW_OPEN_DEMO = os.getenv("ALLOW_OPEN_DEMO", "").strip().lower() in {"1", "true", "yes", "si", "sí"}
 
 # Chat web: sid firmados, tope de sesiones en memoria y rate limit por IP.
 # SESSION_SECRET firma los sid que entrega /api/sesion. En Render va con

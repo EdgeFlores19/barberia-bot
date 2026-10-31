@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -10,6 +11,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import acceso, config, engine, seed, store, whatsapp_webhook
+
+log = logging.getLogger(__name__)
+
+# Falla cerrado: sin código el chat web quedaría abierto a cualquiera y con él el tope
+# diario de mensajes se agota solo. Para abrirlo a propósito (solo local): ALLOW_OPEN_DEMO=1.
+if not config.DEMO_CODE and not config.ALLOW_OPEN_DEMO:
+    raise RuntimeError(
+        "DEMO_CODE no está definido. Defínelo (en Render: variable de entorno en el panel) "
+        "o usa ALLOW_OPEN_DEMO=1 solo en desarrollo local."
+    )
+if config.SESSION_SECRET_EFIMERA:
+    log.warning("SESSION_SECRET no está definido: se generó uno temporal y las sesiones "
+                "abiertas se invalidan en cada reinicio.")
 
 app = FastAPI(title="Estudio de Uñas Ámbar — bot demo")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
