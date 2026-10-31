@@ -1,5 +1,6 @@
 """Configuración por entorno. Sin secretos en el repo."""
 import os
+import secrets
 from pathlib import Path
 
 from .telefono import t10
@@ -17,6 +18,21 @@ SEED_DEMO = os.getenv("SEED_DEMO", "1").strip().lower() not in {"0", "false", "n
 
 # Acceso a la demo
 DEMO_CODE = os.getenv("DEMO_CODE", "ambar")
+
+# Chat web: sid firmados, tope de sesiones en memoria y rate limit por IP.
+# SESSION_SECRET firma los sid que entrega /api/sesion. En Render va con
+# `generateValue: true` (se genera una vez y se conserva); si falta, se genera una al
+# arrancar y los sid vigentes dejan de servir en cada reinicio.
+SESSION_SECRET = os.getenv("SESSION_SECRET", "").strip()
+SESSION_SECRET_EFIMERA = not SESSION_SECRET
+if SESSION_SECRET_EFIMERA:
+    SESSION_SECRET = secrets.token_hex(32)
+MAX_SESIONES_WEB = int(os.getenv("MAX_SESIONES_WEB", "2000"))
+RATE_SESION_POR_MIN = int(os.getenv("RATE_SESION_POR_MIN", "10"))      # por IP
+RATE_MENSAJE_POR_MIN = int(os.getenv("RATE_MENSAJE_POR_MIN", "60"))    # por IP
+# Cómo leer la IP del cliente tras el proxy de Render. 0 = primera IP de X-Forwarded-For;
+# N > 0 = la N-ésima desde la derecha (la que agrega un proxy de confianza).
+IP_DESDE_DERECHA = int(os.getenv("IP_DESDE_DERECHA", "0"))
 
 # Presupuesto duro (capa 2 del esquema de acceso)
 MAX_MENSAJES_POR_SESION = int(os.getenv("MAX_MENSAJES_POR_SESION", "40"))

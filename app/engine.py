@@ -69,6 +69,19 @@ def _purgar_sesiones() -> None:
         SESIONES.pop(sid, None)
 
 
+def recortar_sesiones(maximo: int) -> None:
+    """Deja como mucho `maximo` sesiones, desalojando las más inactivas del chat web.
+
+    Las de WhatsApp no se tocan: pueden estar en manos de la manicurista (TTL de 12 h).
+    """
+    exceso = len(SESIONES) - maximo
+    if exceso <= 0:
+        return
+    web = sorted((x for x in SESIONES.values() if x.canal == "web"), key=lambda x: x.ultima_actividad)
+    for x in web[:exceso]:
+        SESIONES.pop(x.sid, None)
+
+
 # ---------- respuestas ----------
 def _t(texto: str, **extra: Any) -> dict[str, Any]:
     return {"tipo": "texto", "texto": texto, **extra}

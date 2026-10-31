@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import hmac
 import os
-import uuid
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, engine, seed, store, whatsapp_webhook
+from . import acceso, config, engine, seed, store, whatsapp_webhook
 
 app = FastAPI(title="Estudio de Uñas Ámbar — bot demo")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
@@ -49,24 +48,54 @@ def negocio():
     }
 
 
+def _tope(request: Request, clave: str, maximo: int) -> None:
+    """429 si esta IP pasó el tope por minuto. Es best-effort: X-Forwarded-For se puede falsear."""
+    ip = acceso.ip_cliente(
+        request.headers.get("x-forwarded-for", ""),
+        request.client.host if request.client else "",
+        config.IP_DESDE_DERECHA,
+    )
+    if not acceso.permitir(clave, ip, maximo):
+        raise HTTPException(
+            status_code=429,
+            detail="Demasiadas solicitudes. Espera un minuto.",
+            headers={"Retry-After": "60"},
+        )
+
+
+def _codigo_valido(codigo: str) -> bool:
+    return not config.DEMO_CODE or acceso.codigo_ok(codigo)
+
+
+# `async def` a propósito: así toca SESIONES en el hilo del event loop, el mismo que
+# recorre el diccionario en engine.manejar, y no en el pool de hilos.
 @app.post("/api/sesion")
-def nueva_sesion(body: NuevaSesion):
-    if config.DEMO_CODE and body.codigo.strip() != config.DEMO_CODE:
+async def nueva_sesion(request: Request, body: NuevaSesion):
+    _tope(request, "sesion", config.RATE_SESION_POR_MIN)
+    if not _codigo_valido(body.codigo):
         raise HTTPException(status_code=401, detail="Código de demo inválido.")
-    sid = uuid.uuid4().hex[:12]
+    # Memoria acotada: purga las vencidas y desaloja las más viejas del chat web.
+    engine._purgar_sesiones()
+    engine.recortar_sesiones(config.MAX_SESIONES_WEB - 1)
+    sid = acceso.nuevo_sid()
     engine.SESIONES[sid] = engine.Sesion(sid)
     return {"sid": sid, "respuestas": engine.bienvenida(DATOS)}
 
 
 @app.post("/api/mensaje")
-async def mensaje(body: Entrada):
-    if config.DEMO_CODE and body.codigo.strip() != config.DEMO_CODE:
+async def mensaje(request: Request, body: Entrada):
+    _tope(request, "mensaje", config.RATE_MENSAJE_POR_MIN)
+    if not _codigo_valido(body.codigo):
         raise HTTPException(status_code=401, detail="Código de demo inválido.")
     # El chat web no puede entrar a la sesión de un cliente de WhatsApp.
     if body.sid.startswith("wa:"):
         raise HTTPException(status_code=400, detail="sid inválido.")
     if not body.texto.strip():
         raise HTTPException(status_code=422, detail="Mensaje vacío.")
+    # Solo valen los sid que emitió /api/sesion: inventar uno por mensaje esquivaba el
+    # tope por sesión, agotaba el tope diario y llenaba la memoria de sesiones.
+    if not acceso.sid_valido(body.sid):
+        raise HTTPException(status_code=401, detail="Sesión inválida o vencida. Recarga la página.")
     respuestas, sesion = await engine.manejar(body.sid, body.texto.strip(), DATOS)
     return {
         "respuestas": respuestas,

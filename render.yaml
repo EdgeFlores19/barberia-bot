@@ -20,6 +20,10 @@ services:
         sync: false # se captura en el panel, nunca en el repo
       - key: DEEPSEEK_API_KEY
         sync: false
+      # Clave para firmar los sid del chat web. Render la genera una vez y la conserva;
+      # sin ella, cada reinicio invalidaría las sesiones abiertas.
+      - key: SESSION_SECRET
+        generateValue: true
       - key: MAX_MENSAJES_POR_SESION
         value: 30
       - key: MAX_MENSAJES_POR_DIA
