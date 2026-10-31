@@ -422,7 +422,10 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
                    [(i, _etiqueta_slot(i)) for i in libres[:8]])], s
 
     try:
-        cita = store.crear(slot, sid, nombre)
+        # En WhatsApp la cita queda ligada al teléfono: sin esto, el candado de folio
+        # (`_folio_autorizado`) no deja al propio cliente cancelar ni mover su cita.
+        tel = s.telefono if s.canal == "wa" else ""
+        cita = store.crear(slot, sid, nombre, tel)
     except store.SlotOcupado:
         s.paso = "agendar_slot"
         libres = slots_disponibles(datos, sid)
