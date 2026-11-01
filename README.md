@@ -7,7 +7,8 @@
 
 Asistente conversacional para un estudio de uñas en Aguascalientes: responde preguntas frecuentes, agenda citas
 y pasa la conversación a una persona cuando hace falta. Es un **proyecto muestra**: no está
-conectado a un número real de WhatsApp, se usa desde un chat web con la estética de WhatsApp.
+conectado a un número de WhatsApp del negocio (solo al número de prueba de Meta, que únicamente
+atiende a personas con rol en la app), y se usa desde un chat web con la estética de WhatsApp.
 
 > **Negocio ficticio.** Nombre, dirección (Av. Francisco I. Madero 328, Col. Centro, Aguascalientes),
 > teléfono, precios y servicios son inventados. Todos los datos viven en `data/barberia.json` y se
@@ -75,7 +76,7 @@ La primera vez siembra dos citas de ejemplo (`SEED_DEMO=0` lo desactiva).
 ### Pruebas
 
 ```bash
-.venv/Scripts/python -m pytest tests/ -q --ignore=tests/smoke_test.py   # 54 pruebas
+.venv/Scripts/python -m pytest tests/ -q --ignore=tests/smoke_test.py   # 192 pruebas
 .venv/Scripts/python tests/smoke_test.py                                # contra el servidor
 ```
 
@@ -120,10 +121,23 @@ python scripts/wa_simula.py "precios"
 Con credenciales reales: webhook `https://<host>/wa/webhook`, campos `messages`,
 y las variables `WA_VERIFY_TOKEN`, `WA_APP_SECRET`, `WA_TOKEN`, `WA_PHONE_ID`.
 
-El canal está **apagado en producción** a propósito: sin las variables `WA_*` el `POST` del
-webhook responde 503 y el `GET` 403. Lo que falta para encenderlo (disco persistente, `SEED_DEMO=0`, aviso de
-privacidad) y las decisiones de diseño están en
-[`docs/adr/0001-canal-whatsapp-cloud-api.md`](docs/adr/0001-canal-whatsapp-cloud-api.md).
+El canal está **encendido desde el 2026-11-01** (`WA_MODO=graph`): el webhook verifica la firma
+HMAC de Meta, y `GET /health` publica el diagnóstico en vivo (`posts`, `eventos`, `envios_ok`,
+`envios_fallidos`, `firma_rechazada`, `ultimo_codigo_envio`) sin guardar teléfonos ni texto de
+clientes. Sin las variables `WA_*` el canal queda apagado y el `GET` del webhook responde 403.
+
+Sigue siendo **canal de prueba**: el número es el de test de Meta, ambas funciones de WhatsApp
+están en "Listo para prueba" (sin App Review no se atiende a clientes reales), el disco es efímero
+y el servicio duerme. Lo que falta para operar de verdad está en los issues del repo.
+
+### Decisiones de diseño
+
+| ADR | Tema |
+|---|---|
+| [`0001`](docs/adr/0001-canal-whatsapp-cloud-api.md) | Canal WhatsApp Cloud API: adaptador aislado del motor (D1–D10) |
+| [`0002`](docs/adr/0002-persistencia-disco-efimero.md) | SQLite efímera aceptada como demo y gatillo para reabrir |
+| [`0003`](docs/adr/0003-marca-ambar.md) | La marca es **Ambar**: qué se renombra y qué se conserva |
+| [`0004`](docs/adr/0004-datos-reales-solo-legales.md) | Datos reales del negocio solo en privacidad y condiciones |
 
 ## Deploy (Render, plan free)
 
@@ -158,5 +172,6 @@ Dos cosas honestas del plan free:
 - **F1 (hecho)**: datos + FAQ + chat local funcionando.
 - **F2 (hecho)**: agenda en SQLite con folio, cancelar/reagendar y sync opcional a Google Calendar.
 - **F3 (hecho)**: repo público, CI, capturas y deploy en Render.
-- Fuera de alcance: adaptador real de WhatsApp Cloud API (el motor ya está aislado detrás de una
-  interfaz para conectarlo después).
+- **F4 (hecho)**: canal WhatsApp Cloud API sobre el mismo motor, con `/privacidad` y `/terminos`.
+- **F5 (pendiente)**: operar con clientes reales — verificación de negocio y App Review de Meta,
+  disco persistente y `SEED_DEMO=0`.
