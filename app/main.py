@@ -25,7 +25,7 @@ if config.SESSION_SECRET_EFIMERA:
     log.warning("SESSION_SECRET no está definido: se generó uno temporal y las sesiones "
                 "abiertas se invalidan en cada reinicio.")
 
-app = FastAPI(title="Estudio de Uñas Ámbar — bot demo")
+app = FastAPI(title="Nodeva — bot demo")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 app.include_router(whatsapp_webhook.router)
 
@@ -49,6 +49,12 @@ class NuevaSesion(BaseModel):
 @app.get("/")
 def index():
     return FileResponse(config.STATIC_DIR / "index.html")
+
+
+@app.get("/privacidad")
+def privacidad():
+    """Aviso de privacidad LFPDPPP. Meta exige una URL pública para publicar la app."""
+    return FileResponse(config.STATIC_DIR / "privacidad.html")
 
 
 @app.get("/api/negocio")
