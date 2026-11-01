@@ -17,7 +17,7 @@ def test_privacidad_se_sirve_y_cubre_lfpdppp():
     for clave in (
         "Aviso de privacidad",
         "LFPDPPP",
-        "Nodeva",
+        "Ambar",
         "Vidal Roldán Ávila #105",
         "Acceso, Rectificación, Cancelación y Oposición",
         "Meta Platforms",
@@ -34,7 +34,7 @@ def test_terminos_se_sirven_y_son_coherentes_con_el_negocio():
     texto = r.text
     for clave in (
         "Condiciones de uso",
-        "Nodeva",
+        "Ambar",
         "449 548 5324",
         "nodeva3010@gmail.com",
         # Reglas reales de agenda: si cambian en data/barberia.json, este test lo delata.

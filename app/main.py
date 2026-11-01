@@ -25,7 +25,7 @@ if config.SESSION_SECRET_EFIMERA:
     log.warning("SESSION_SECRET no está definido: se generó uno temporal y las sesiones "
                 "abiertas se invalidan en cada reinicio.")
 
-app = FastAPI(title="Nodeva — bot demo")
+app = FastAPI(title="Ambar — bot demo")
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 app.include_router(whatsapp_webhook.router)
 

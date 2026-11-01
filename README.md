@@ -1,4 +1,4 @@
-# Nodeva — bot de WhatsApp (demo)
+# Ambar — bot de WhatsApp (demo)
 
 [![tests](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml)
 
