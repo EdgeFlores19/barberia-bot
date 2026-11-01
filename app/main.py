@@ -57,6 +57,12 @@ def privacidad():
     return FileResponse(config.STATIC_DIR / "privacidad.html")
 
 
+@app.get("/terminos")
+def terminos():
+    """Condiciones de uso del asistente y del agendado de citas."""
+    return FileResponse(config.STATIC_DIR / "terminos.html")
+
+
 @app.get("/api/negocio")
 def negocio():
     return {
