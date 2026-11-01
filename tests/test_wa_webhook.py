@@ -250,9 +250,16 @@ def test_hay_un_candado_por_telefono():
 def test_salud_del_canal_tiene_los_contadores(bd):
     s = whatsapp_webhook.salud()
     for clave in ("verificaciones", "posts", "firma_rechazada", "eventos",
-                  "mensajes", "envios_ok", "envios_fallidos", "ultimo_post"):
+                  "mensajes", "envios_ok", "envios_fallidos", "ultimo_post",
+                  "ultimo_codigo_envio"):
         assert clave in s
     assert isinstance(s["posts"], int)
+
+
+def test_salud_incluye_el_ultimo_codigo_de_meta(bd):
+    s = whatsapp_webhook.salud()
+    assert "ultimo_codigo_envio" in s
+    assert isinstance(s["ultimo_codigo_envio"], int)
 
 
 def test_post_sin_firma_queda_contado_en_salud(bd, monkeypatch):

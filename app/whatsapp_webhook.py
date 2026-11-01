@@ -43,6 +43,7 @@ SALUD: dict[str, Any] = {
     "envios_fallidos": 0,
     "ultimo_post": "",
     "ultimo_envio_error": "",
+    "ultimo_codigo_envio": 0,
 }
 
 
@@ -53,7 +54,7 @@ def _marca() -> str:
 
 def salud() -> dict[str, Any]:
     """Copia de los contadores. Sin teléfonos ni texto de los clientes."""
-    return dict(SALUD)
+    return dict(SALUD, ultimo_codigo_envio=wa_cliente.ultimo_codigo())
 
 
 def firma_valida(cuerpo: bytes, cabecera: str) -> bool:
