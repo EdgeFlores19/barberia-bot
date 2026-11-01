@@ -161,8 +161,11 @@ def citas(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"
 @app.get("/health")
 def health():
     # `commit` deja ver qué versión está sirviendo Render (lo inyecta la plataforma).
+    # `wa` son contadores del canal: dicen si Meta llama y si los envíos salen, sin
+    # depender del log de Render (que se pierde en cada reinicio del plan gratuito).
     return {
         "ok": True,
         "llm": bool(config.DEEPSEEK_API_KEY),
         "commit": os.getenv("RENDER_GIT_COMMIT", "local")[:7],
+        "wa": whatsapp_webhook.salud(),
     }

@@ -245,3 +245,49 @@ def test_hay_un_candado_por_telefono():
     c = whatsapp_webhook.candado("5215500000002")
     assert a is b
     assert a is not c
+
+
+def test_salud_del_canal_tiene_los_contadores(bd):
+    s = whatsapp_webhook.salud()
+    for clave in ("verificaciones", "posts", "firma_rechazada", "eventos",
+                  "mensajes", "envios_ok", "envios_fallidos", "ultimo_post"):
+        assert clave in s
+    assert isinstance(s["posts"], int)
+
+
+def test_post_sin_firma_queda_contado_en_salud(bd, monkeypatch):
+    monkeypatch.setattr(config, "WA_MODO", "consola")
+    monkeypatch.setattr(config, "WA_VERIFY_TOKEN", "prueba")
+    monkeypatch.setattr(config, "WA_APP_SECRET", "s3cr3t")
+    antes_posts = whatsapp_webhook.SALUD["posts"]
+    antes_firma = whatsapp_webhook.SALUD["firma_rechazada"]
+    r = _cliente().post("/wa/webhook", content=json.dumps(_payload("hola")))
+    assert r.status_code == 403
+    assert whatsapp_webhook.SALUD["posts"] == antes_posts + 1
+    assert whatsapp_webhook.SALUD["firma_rechazada"] == antes_firma + 1
+
+
+def test_post_valido_suma_posts_y_eventos(bd, monkeypatch):
+    monkeypatch.setattr(config, "WA_MODO", "consola")
+    monkeypatch.setattr(config, "WA_VERIFY_TOKEN", "prueba")
+    monkeypatch.setattr(config, "WA_APP_SECRET", "s3cr3t")
+    antes_posts = whatsapp_webhook.SALUD["posts"]
+    antes_eventos = whatsapp_webhook.SALUD["eventos"]
+    cuerpo = json.dumps(_payload("precios", msg_id="wamid.salud")).encode()
+    r = _cliente().post(
+        "/wa/webhook", content=cuerpo,
+        headers={"Content-Type": "application/json", "X-Hub-Signature-256": _firmar(cuerpo)},
+    )
+    assert r.status_code == 200
+    assert whatsapp_webhook.SALUD["posts"] == antes_posts + 1
+    assert whatsapp_webhook.SALUD["eventos"] == antes_eventos + 1
+    assert whatsapp_webhook.SALUD["ultimo_post"].endswith("Z")
+
+
+def test_health_publica_el_diagnostico_del_canal(bd):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    wa = TestClient(app).get("/health").json()["wa"]
+    assert wa == whatsapp_webhook.salud()

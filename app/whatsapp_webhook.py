@@ -28,6 +28,33 @@ AVISO_SIN_TEXTO = (
     "Por ahora solo entiendo mensajes de texto. Escribe *menu* y te muestro las opciones."
 )
 
+# Diagnóstico del canal. Son contadores en memoria que `/health` expone para poder
+# distinguir "Meta no llama" de "Meta llama y el envío falla" sin depender del log de
+# Render, que en el plan gratuito se pierde en cada reinicio y no se puede consultar
+# desde fuera. Se reinician con el proceso; para lo que sirve (ver si llega tráfico
+# ahora mismo) eso no estorba.
+SALUD: dict[str, Any] = {
+    "verificaciones": 0,
+    "posts": 0,
+    "firma_rechazada": 0,
+    "eventos": 0,
+    "mensajes": 0,
+    "envios_ok": 0,
+    "envios_fallidos": 0,
+    "ultimo_post": "",
+    "ultimo_envio_error": "",
+}
+
+
+def _marca() -> str:
+    """Hora UTC corta, sin dependencias nuevas."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def salud() -> dict[str, Any]:
+    """Copia de los contadores. Sin teléfonos ni texto de los clientes."""
+    return dict(SALUD)
+
 
 def firma_valida(cuerpo: bytes, cabecera: str) -> bool:
     """Valida X-Hub-Signature-256: HMAC-SHA256 del cuerpo crudo con el app secret."""
@@ -83,6 +110,7 @@ async def procesar_evento(payload: dict[str, Any], enviar: Enviador | None = Non
     """Atiende cada mensaje nuevo del payload. Devuelve cuántos mensajes respondió."""
     enviar = enviar or wa_cliente.enviar
     atendidos = 0
+    SALUD["eventos"] += 1
 
     for msg in extraer_mensajes(payload):
         async with candado(msg["wa_id"]):
@@ -102,6 +130,7 @@ async def procesar_evento(payload: dict[str, Any], enviar: Enviador | None = Non
             await _enviar(msg["wa_id"], respuestas, enviar)
             atendidos += 1
 
+    SALUD["mensajes"] += atendidos
     return atendidos
 
 
@@ -123,7 +152,11 @@ async def _alerta_envio_fallido() -> None:
 async def _enviar(wa_id: str, respuestas: list[dict[str, Any]], enviar: Enviador) -> None:
     for payload in whatsapp_formato.a_payloads(respuestas):
         if not await enviar(wa_id, payload):
+            SALUD["envios_fallidos"] += 1
+            SALUD["ultimo_envio_error"] = _marca()
             await _alerta_envio_fallido()
+        else:
+            SALUD["envios_ok"] += 1
 
 
 @router.get("/wa/webhook")
@@ -138,6 +171,7 @@ def verificar(
         and config.WA_VERIFY_TOKEN
         and hmac.compare_digest(hub_token.encode(), config.WA_VERIFY_TOKEN.encode())
     ):
+        SALUD["verificaciones"] += 1
         return PlainTextResponse(hub_challenge)
     raise HTTPException(status_code=403, detail="Verificación fallida.")
 
@@ -149,7 +183,12 @@ async def recibir(request: Request, tareas: BackgroundTasks) -> dict[str, bool]:
         raise HTTPException(status_code=503, detail="WhatsApp no configurado.")
     cuerpo = await request.body()
     if not firma_valida(cuerpo, request.headers.get("x-hub-signature-256", "")):
+        SALUD["posts"] += 1
+        SALUD["firma_rechazada"] += 1
+        SALUD["ultimo_post"] = _marca()
         raise HTTPException(status_code=403, detail="Firma inválida.")
+    SALUD["posts"] += 1
+    SALUD["ultimo_post"] = _marca()
     try:
         payload = json.loads(cuerpo or b"{}")
     except json.JSONDecodeError as exc:
