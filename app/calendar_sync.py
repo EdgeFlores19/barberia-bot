@@ -22,9 +22,42 @@ log = logging.getLogger("ambar.calendar")
 
 _TOKEN: dict[str, Any] = {"access": "", "expira": 0.0}
 
+# Diagnóstico sin secretos: por qué no se está agendando. Sale en /health.
+_ESTADO: dict[str, Any] = {"intentos": 0, "ok": 0, "ultimo_error": ""}
+
+
+def _anotar(motivo: str) -> None:
+    _ESTADO["ultimo_error"] = motivo[:300]
+
 
 def habilitado() -> bool:
     return bool(config.CALENDAR_ID and config.CALENDAR_TOKEN_FILE)
+
+
+def salud() -> dict[str, Any]:
+    """Estado de la integración para /health. Nunca expone el contenido del token."""
+    t = _leer_token()
+    if not config.CALENDAR_ID:
+        motivo = "falta GOOGLE_CALENDAR_ID"
+    elif not config.CALENDAR_TOKEN_FILE:
+        motivo = "falta GOOGLE_TOKEN_JSON"
+    elif not t:
+        motivo = "el archivo del token no se pudo leer"
+    elif not t.get("refresh_token"):
+        motivo = "el token no tiene refresh_token"
+    else:
+        motivo = ""
+    return {
+        "habilitado": habilitado(),
+        "calendar_id": config.CALENDAR_ID or "(vacío)",
+        "token_file": config.CALENDAR_TOKEN_FILE,
+        "token_legible": bool(t),
+        "tiene_refresh": bool(t and t.get("refresh_token")),
+        "intentos": _ESTADO["intentos"],
+        "eventos_ok": _ESTADO["ok"],
+        "problema_config": motivo,
+        "ultimo_error": _ESTADO["ultimo_error"],
+    }
 
 
 def _leer_token() -> dict[str, Any] | None:
@@ -106,25 +139,33 @@ def _url(event_id: str = "") -> str:
 def crear(cita: dict[str, Any], datos: dict[str, Any]) -> str | None:
     """Crea el evento espejo. Devuelve el id o None si Calendar no está disponible."""
     if not habilitado():
+        _anotar("Calendar deshabilitado (revisa GOOGLE_CALENDAR_ID / GOOGLE_TOKEN_JSON)")
         return None
     cab = _cabeceras()
     if not cab:
+        _anotar("sin access token: no se pudo leer el archivo ni refrescar")
         return None
+    _ESTADO["intentos"] += 1
     try:
         r = httpx.post(_url(), json=_evento(cita, datos), headers=cab, timeout=config.CALENDAR_TIMEOUT_S)
         r.raise_for_status()
+        _ESTADO["ok"] += 1
+        _anotar("")
         return r.json().get("id")
     except (httpx.HTTPError, ValueError) as e:
         log.warning("no se creó el evento de %s: %s", cita.get("folio"), e)
+        _anotar(f"crear {cita.get('folio')}: {e}")
         return None
 
 
 def mover(event_id: str | None, cita: dict[str, Any], datos: dict[str, Any]) -> str | None:
     """Mueve el evento existente; si ya no existe, lo vuelve a crear."""
     if not habilitado():
+        _anotar("Calendar deshabilitado (revisa GOOGLE_CALENDAR_ID / GOOGLE_TOKEN_JSON)")
         return None
     cab = _cabeceras()
     if not cab:
+        _anotar("sin access token: no se pudo leer el archivo ni refrescar")
         return None
     if not event_id:
         return crear(cita, datos)
@@ -138,6 +179,7 @@ def mover(event_id: str | None, cita: dict[str, Any], datos: dict[str, Any]) -> 
         return event_id
     except (httpx.HTTPError, ValueError) as e:
         log.warning("no se movió el evento de %s: %s", cita.get("folio"), e)
+        _anotar(f"mover {cita.get('folio')}: {e}")
         return event_id
 
 
@@ -153,4 +195,5 @@ def borrar(event_id: str | None) -> bool:
         return r.status_code in (200, 204, 404, 410)
     except httpx.HTTPError as e:
         log.warning("no se borró el evento %s: %s", event_id, e)
+        _anotar(f"borrar {event_id}: {e}")
         return False

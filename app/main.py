@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import acceso, config, engine, seed, store, whatsapp_webhook
+from . import acceso, calendar_sync, config, engine, seed, store, whatsapp_webhook
 
 log = logging.getLogger(__name__)
 
@@ -168,4 +168,5 @@ def health():
         "llm": bool(config.DEEPSEEK_API_KEY),
         "commit": os.getenv("RENDER_GIT_COMMIT", "local")[:7],
         "wa": whatsapp_webhook.salud(),
+        "calendar": calendar_sync.salud(),
     }

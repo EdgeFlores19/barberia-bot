@@ -6,3 +6,12 @@ __pycache__/
 *.db-wal
 *.db-shm
 .pytest_cache/
+
+# Credenciales de Google Calendar: nunca al repo
+google_token.json
+client_secret.json
+ambar_calendar_token.json
+handoff.md
+harness/
+
+google_auth/
