@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 from typing import Any
@@ -42,15 +43,19 @@ def salud() -> dict[str, Any]:
     elif not config.CALENDAR_TOKEN_FILE:
         motivo = "falta GOOGLE_TOKEN_JSON"
     elif not t:
-        motivo = "el archivo del token no se pudo leer"
+        motivo = "el token no se pudo leer (archivo inexistente, sin permisos o JSON inválido)"
     elif not t.get("refresh_token"):
         motivo = "el token no tiene refresh_token"
     else:
         motivo = ""
+    en_variable = config.CALENDAR_TOKEN_FILE.strip().startswith("{")
     return {
         "habilitado": habilitado(),
         "calendar_id": config.CALENDAR_ID or "(vacío)",
-        "token_file": config.CALENDAR_TOKEN_FILE,
+        # Nunca se imprime el valor de la variable: si trae el JSON, se enmascara.
+        "token_file": "(JSON en la variable GOOGLE_TOKEN_JSON)" if en_variable else config.CALENDAR_TOKEN_FILE,
+        "token_en_variable": en_variable,
+        "token_file_existe": (not en_variable) and os.path.exists(config.CALENDAR_TOKEN_FILE),
         "token_legible": bool(t),
         "tiene_refresh": bool(t and t.get("refresh_token")),
         "intentos": _ESTADO["intentos"],
@@ -61,8 +66,20 @@ def salud() -> dict[str, Any]:
 
 
 def _leer_token() -> dict[str, Any] | None:
+    """El token puede venir como ruta a un archivo o como JSON pegado en la variable.
+
+    Pegar el JSON entero evita depender de que el Secret File de Render llegue montado
+    en /etc/secrets: si el archivo no aparece, el bot se queda sin Calendar en silencio.
+    """
+    origen = config.CALENDAR_TOKEN_FILE.strip()
+    if origen.startswith("{"):
+        try:
+            return json.loads(origen)
+        except ValueError as e:
+            log.warning("GOOGLE_TOKEN_JSON no es JSON válido: %s", e)
+            return None
     try:
-        with open(config.CALENDAR_TOKEN_FILE, encoding="utf-8") as f:
+        with open(origen, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError) as e:
         log.warning("sin token de Calendar: %s", e)
