@@ -54,6 +54,10 @@
     border-radius:10px;cursor:pointer;font-family:inherit;font-size:14px}
   .gate .err{color:#f15c6d;font-size:12.5px;min-height:16px}
   .escritorio{position:relative;display:flex;flex-direction:column;flex:1;min-height:0}
+  .folio{font:inherit;font-weight:700;letter-spacing:.04em;color:#00d3a0;background:rgba(0,168,132,.14);
+    border:1px dashed #00a884;border-radius:6px;padding:0 6px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .folio:hover{background:rgba(0,168,132,.26)}
+  .folio::after{content:"\1F4CB";margin-left:5px;font-size:.85em;opacity:.75}
   .nota{position:absolute;bottom:70px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.65);
     color:#c8d2d6;font-size:11px;padding:4px 10px;border-radius:10px;pointer-events:none}
 </style>
@@ -77,6 +81,7 @@
       <input id="texto" placeholder="Escribe un mensaje" />
       <button class="enviar" type="submit" aria-label="Enviar">➤</button>
     </form>
+    <div class="nota" id="nota" role="status" aria-live="polite" hidden></div>
   </div>
 </div>
 <script>
@@ -90,12 +95,64 @@ let sid = null, codigo = '';
 
 const hora = () => new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
 
+// Folio tipo AMB-7K4Q: 3 letras, guion y 4 caracteres del alfabeto de los folios (sin 0, 1, I ni O).
+// Se pinta como botón que lo copia al tocarlo. El de los mensajes de ayuda es solo un ejemplo.
+const RE_FOLIO = /\b[A-Z]{3}-[2-9A-HJ-NP-Z]{4}\b/g;
+const FOLIOS_EJEMPLO = new Set(['AMB-7K4Q']);
+
+function partirFolios(texto){
+  const partes = []; let ultimo = 0;
+  for (const m of texto.matchAll(RE_FOLIO)){
+    if (FOLIOS_EJEMPLO.has(m[0])) continue;
+    if (m.index > ultimo) partes.push({texto: texto.slice(ultimo, m.index)});
+    partes.push({folio: m[0]});
+    ultimo = m.index + m[0].length;
+  }
+  if (ultimo < texto.length) partes.push({texto: texto.slice(ultimo)});
+  return partes;
+}
+
+let temporizadorAviso = null;
+function avisar(mensaje){
+  const nota = document.getElementById('nota');
+  nota.textContent = mensaje; nota.hidden = false;
+  clearTimeout(temporizadorAviso);
+  temporizadorAviso = setTimeout(() => { nota.hidden = true; }, 1800);
+}
+
+async function copiar(texto){
+  try{ await navigator.clipboard.writeText(texto); return true; }
+  catch(e){ /* sin permiso o sin contexto seguro: plan B */ }
+  const t = document.createElement('textarea');
+  t.value = texto; t.setAttribute('readonly', '');
+  t.style.position = 'fixed'; t.style.opacity = '0';
+  document.body.appendChild(t); t.select();
+  let ok = false;
+  try{ ok = document.execCommand('copy'); }catch(e){}
+  t.remove();
+  return ok;
+}
+
+function botonFolio(folio){
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'folio'; b.textContent = folio;
+  b.title = 'Toca para copiar';
+  b.setAttribute('aria-label', 'Copiar folio ' + folio);
+  b.onclick = async () => avisar(await copiar(folio) ? 'Folio copiado' : 'No se pudo copiar: selecciónalo y cópialo');
+  return b;
+}
+
+function pintarTexto(el, texto){
+  // Solo nodos de texto y botones: nada de innerHTML con lo que llega del servidor.
+  partirFolios(texto).forEach(p => el.appendChild(p.folio ? botonFolio(p.folio) : document.createTextNode(p.texto)));
+}
+
 function burbuja(texto, quien, opciones){
   const fila = document.createElement('div');
   fila.className = 'fila ' + quien;
   const b = document.createElement('div');
   b.className = 'burbuja';
-  b.textContent = texto;
+  if (quien === 'bot') pintarTexto(b, texto); else b.textContent = texto;
   const h = document.createElement('span');
   h.className = 'hora'; h.textContent = hora();
   b.appendChild(h);
