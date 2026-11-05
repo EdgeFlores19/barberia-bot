@@ -262,6 +262,20 @@ def test_wa_folio_ajeno_responde_igual_que_folio_inexistente(datos):
     assert ajeno == inexistente
 
 
+@pytest.mark.parametrize("respuesta", [
+    "no", "no tengo", "no lo tengo", "no sé", "no recuerdo", "no me acuerdo",
+    "volver", "regresar", "salir",
+])
+def test_sin_folio_regresa_al_menu(datos, respuesta):
+    _enviar("w_sin_folio", "citas", datos)
+
+    resp, sesion = _enviar("w_sin_folio", respuesta, datos)
+
+    assert "¿Qué necesitas?" in resp[-1]["texto"]
+    assert sesion.paso == "inicio"
+    assert sesion.folio is None
+
+
 def test_wa_cancela_su_propia_cita_aunque_llegue_con_521(datos):
     cita = _cita_ajena(datos, TEL_A)
 

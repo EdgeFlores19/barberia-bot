@@ -490,6 +490,15 @@ def _folio_autorizado(s: Sesion, cita: dict[str, Any] | None) -> bool:
 
 
 def _paso_citas_folio(s: Sesion, texto: str, datos: dict[str, Any]):
+    respuesta = _norm(texto)
+    if respuesta in {
+        "no", "no se", "no tengo", "no lo tengo", "no lo se", "no recuerdo",
+        "no me acuerdo", "no encuentro", "volver", "regresar", "salir",
+    }:
+        s.paso = "inicio"
+        s.folio = None
+        return bienvenida(datos), s
+
     folio = _folio_de(texto) or (texto.strip().upper() if texto.strip() else "")
     cita = store.obtener(folio) if folio else None
     if not _folio_autorizado(s, cita):
