@@ -262,6 +262,22 @@ def test_wa_folio_ajeno_responde_igual_que_folio_inexistente(datos):
     assert ajeno == inexistente
 
 
+def test_wa_recomprueba_propiedad_antes_de_confirmar_reagendado(datos):
+    cita = _cita_ajena(datos, TEL_A)
+    _enviar("w_reagenda_cambio", f"mover {cita['folio']}", datos)
+    sesion = engine.SESIONES["w_reagenda_cambio"]
+    sesion.telefono = TEL_B
+    slot_original = cita["slot"]
+    nuevo = next(x for x in engine.slots_disponibles(datos, "manicura", excluir_folio=cita["folio"])
+                 if x != slot_original)
+
+    resp, _ = asyncio.run(engine.manejar("w_reagenda_cambio", nuevo, datos,
+                                         canal="wa", telefono=TEL_B))
+
+    assert "no está activa" in resp[0]["texto"].lower()
+    assert store.obtener(cita["folio"])["slot"] == slot_original
+
+
 @pytest.mark.parametrize("respuesta", [
     "no", "no tengo", "no lo tengo", "no sé", "no recuerdo", "no me acuerdo",
     "volver", "regresar", "salir",

@@ -594,6 +594,8 @@ def _empezar_reagendar(s: Sesion, folio: str, datos: dict[str, Any]):
 async def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     folio = s.folio or ""
     cita = store.obtener(folio)
+    if not _folio_autorizado(s, cita):
+        cita = None            # volver a comprobar antes de modificar la cita
     if not cita or cita["estado"] == "cancelada":
         s.paso = "inicio"
         return [_t("Esa cita ya no está activa."), _b("Menú:", MENU)], s
