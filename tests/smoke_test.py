@@ -30,6 +30,16 @@ RE_FOLIO = re.compile(r"AMB-[0-9A-Z]{4}")
 # el bot derivaba a la manicurista en vez de cancelar. Reservamos con margen.
 MARGEN_CANCELACION = timedelta(hours=3)
 
+# El runner de CI corre en UTC y los horarios que ofrece el bot vienen en la zona
+# del negocio: comparar contra la hora del proceso daba 6 h de desfase y ningún
+# hueco pasaba el margen. Usamos la misma zona que la app.
+try:
+    from zoneinfo import ZoneInfo
+
+    TZ_AGENDA = ZoneInfo(os.getenv("CALENDAR_TZ", "America/Mexico_City"))
+except Exception:  # Windows sin tzdata: caemos a la hora del proceso
+    TZ_AGENDA = None
+
 
 def mostrar(r: httpx.Response) -> list[dict]:
     r.raise_for_status()
@@ -41,9 +51,11 @@ def mostrar(r: httpx.Response) -> list[dict]:
     return data["respuestas"]
 
 
-def _slot_con_margen(opciones: list[dict]) -> str:
+def _slot_con_margen(opciones: list[dict], ahora: datetime | None = None) -> str:
     """Primer horario que aún se puede cancelar sin que lo cierre la manicurista."""
-    limite = datetime.now() + MARGEN_CANCELACION
+    if ahora is None:
+        ahora = datetime.now(TZ_AGENDA).replace(tzinfo=None)
+    limite = ahora + MARGEN_CANCELACION
     for o in opciones:
         try:
             inicio = datetime.fromisoformat(str(o["id"]))
