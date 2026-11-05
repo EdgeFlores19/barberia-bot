@@ -13,6 +13,8 @@ import os
 import re
 import sys
 
+from datetime import datetime, timedelta
+
 import httpx
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8077"
@@ -21,6 +23,12 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 CABECERAS_ADMIN = {"X-Admin-Token": ADMIN_TOKEN}
 
 RE_FOLIO = re.compile(r"AMB-[0-9A-Z]{4}")
+
+# La cancelación libre vence pocas horas antes de la cita (reglas_agenda del negocio).
+# Reservar el primer hueco del día hacía que el smoke dependiera de la hora a la que
+# corriera: pasadas las ~14:00 el hueco más cercano ya estaba dentro de la ventana y
+# el bot derivaba a la manicurista en vez de cancelar. Reservamos con margen.
+MARGEN_CANCELACION = timedelta(hours=3)
 
 
 def mostrar(r: httpx.Response) -> list[dict]:
@@ -31,6 +39,21 @@ def mostrar(r: httpx.Response) -> list[dict]:
         for o in x.get("opciones", []):
             print(f"       [{o['id']}] {o['label']}")
     return data["respuestas"]
+
+
+def _slot_con_margen(opciones: list[dict]) -> str:
+    """Primer horario que aún se puede cancelar sin que lo cierre la manicurista."""
+    limite = datetime.now() + MARGEN_CANCELACION
+    for o in opciones:
+        try:
+            inicio = datetime.fromisoformat(str(o["id"]))
+        except (KeyError, ValueError):
+            continue
+        if inicio.tzinfo is not None:
+            inicio = inicio.replace(tzinfo=None)
+        if inicio >= limite:
+            return str(o["id"])
+    raise AssertionError("ningún horario ofrecido queda fuera de la ventana de cancelación")
 
 
 def main() -> int:
@@ -60,7 +83,7 @@ def main() -> int:
         r = enviar(servicio)
         opciones = r["respuestas"][0]["opciones"]
         assert opciones, "debe ofrecer horarios libres"
-        elegido = slot or opciones[0]["id"]
+        elegido = slot or _slot_con_margen(opciones)
         enviar(elegido)
         r = enviar(nombre)
         texto = r["respuestas"][0]["texto"]
