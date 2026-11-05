@@ -280,6 +280,7 @@ def test_wa_recomprueba_propiedad_antes_de_confirmar_reagendado(datos):
 
 @pytest.mark.parametrize("respuesta", [
     "no", "no tengo", "no lo tengo", "no sé", "no recuerdo", "no me acuerdo",
+    "no la tengo", "no me sé el folio", "olvidé el folio", "perdí la confirmación",
     "volver", "regresar", "salir",
 ])
 def test_sin_folio_regresa_al_menu(datos, respuesta):
@@ -290,6 +291,16 @@ def test_sin_folio_regresa_al_menu(datos, respuesta):
     assert "¿Qué necesitas?" in resp[-1]["texto"]
     assert sesion.paso == "inicio"
     assert sesion.folio is None
+
+
+def test_folio_inexistente_ofrece_la_salida(datos):
+    _enviar("w_folio_malo", "citas", datos)
+
+    resp, sesion = _enviar("w_folio_malo", "AMB-ZZZZ", datos)
+
+    assert "No encuentro" in resp[0]["texto"]
+    assert "menú" in resp[0]["texto"].lower()
+    assert sesion.paso == "citas_folio"
 
 
 def test_wa_cancela_su_propia_cita_aunque_llegue_con_521(datos):

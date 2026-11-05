@@ -491,10 +491,13 @@ def _folio_autorizado(s: Sesion, cita: dict[str, Any] | None) -> bool:
 
 def _paso_citas_folio(s: Sesion, texto: str, datos: dict[str, Any]):
     respuesta = _norm(texto)
-    if respuesta in {
-        "no", "no se", "no tengo", "no lo tengo", "no lo se", "no recuerdo",
-        "no me acuerdo", "no encuentro", "volver", "regresar", "salir",
-    }:
+    # Cualquier negativa ("no", "no sé", "no la tengo") o un "olvidé el folio" saca del
+    # paso. Antes se tomaban por un folio inválido y el cliente quedaba en bucle, sin
+    # saber que la salida era escribir "menu". Con folio escrito no se llega aquí:
+    # _flujo lo extrae y llama con texto = folio.
+    palabras = set(re.sub(r"[^\w ]", " ", respuesta).split())
+    negativo = bool(palabras & {"no", "nop", "nel"}) or "olvid" in respuesta or "perdi" in respuesta
+    if negativo or respuesta in {"volver", "regresar", "salir"}:
         s.paso = "inicio"
         s.folio = None
         return bienvenida(datos), s
@@ -504,7 +507,8 @@ def _paso_citas_folio(s: Sesion, texto: str, datos: dict[str, Any]):
     if not _folio_autorizado(s, cita):
         cita = None            # a partir de aquí se comporta como "no existe"
     if not cita:
-        return [_t("No encuentro ninguna cita con ese folio. Revísalo en tu confirmación (tipo AMB-7K4Q).")], s
+        return [_t("No encuentro ninguna cita con ese folio. Revísalo en tu confirmación "
+                   "(tipo AMB-7K4Q), o escribe *menú* si no la tienes a mano.")], s
     if cita["estado"] == "cancelada":
         s.paso = "inicio"
         return [_t(f"La cita {cita['folio']} ya está cancelada. Si quieres, agendamos otra."),
