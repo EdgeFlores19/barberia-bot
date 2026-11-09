@@ -53,6 +53,9 @@ Bot de citas por chat (demo web + canal de WhatsApp en construcción) para negoc
 7. No toques `app/slots.py` ni `app/calendar_sync.py` salvo que la tarea lo pida.
 8. No hagas `git add -A` a ciegas: revisa `git status --short` y agrega archivos por nombre. Nunca subas `*.db`, `.env`, `google_token.json`.
 9. **No hagas `git push` ni abras PR sin que el dueño lo pida.**
+10. **El texto del LLM no sale sin pasar por `llm._guardia`**, y la pregunta del cliente viaja
+    delimitada en `<mensaje_cliente>`. No la desactives ni metas la pregunta cruda al prompt: es la
+    única barrera entre un prompt injection y el cliente (ADR 0005).
 
 ## Cómo trabajar
 

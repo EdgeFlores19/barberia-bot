@@ -58,6 +58,7 @@ Híbrido, con el LLM en un carril estrecho:
 |---|---|
 | Elegir servicio, día y hora | Botones y reglas deterministas (el LLM nunca inventa un horario) |
 | FAQ y texto libre | DeepSeek redacta, **anclado** al JSON del negocio |
+| Salida del LLM | `llm._guardia` la revisa: si inventa enlace, teléfono, monto, promesa o HTML, se descarta y contesta la respuesta local ([ADR 0005](docs/adr/0005-guardia-llm-prompt-injection.md)) |
 | Sin `DEEPSEEK_API_KEY` o si la API falla | Matching local por tags; el bot sigue respondiendo |
 
 ## Arrancar en local
@@ -76,7 +77,7 @@ La primera vez siembra dos citas de ejemplo (`SEED_DEMO=0` lo desactiva).
 ### Pruebas
 
 ```bash
-.venv/Scripts/python -m pytest tests/ -q --ignore=tests/smoke_test.py   # 192 pruebas
+.venv/Scripts/python -m pytest tests/ -q --ignore=tests/smoke_test.py   # 272 pruebas
 .venv/Scripts/python tests/smoke_test.py                                # contra el servidor
 ```
 
@@ -89,7 +90,7 @@ La primera vez siembra dos citas de ejemplo (`SEED_DEMO=0` lo desactiva).
 app/
   main.py      FastAPI: /, /health, /api/sesion, /api/mensaje, /api/negocio, /api/citas
   engine.py    motor conversacional determinista (máquina de estados + intenciones)
-  llm.py       matching de FAQ local + capa DeepSeek opcional con fallback
+  llm.py       matching de FAQ local + capa DeepSeek opcional con fallback y guardia de salida
   slots.py     disponibilidad: horario del negocio, alto del servicio, huecos ocupados
   store.py     citas en SQLite: folio, doble reserva, cancelar y reagendar
   seed.py      citas de ejemplo cuando la agenda arranca vacía
@@ -138,6 +139,7 @@ y el servicio duerme. Lo que falta para operar de verdad está en los issues del
 | [`0002`](docs/adr/0002-persistencia-disco-efimero.md) | SQLite efímera aceptada como demo y gatillo para reabrir |
 | [`0003`](docs/adr/0003-marca-ambar.md) | La marca es **Ambar**: qué se renombra y qué se conserva |
 | [`0004`](docs/adr/0004-datos-reales-solo-legales.md) | Datos reales del negocio solo en privacidad y condiciones |
+| [`0005`](docs/adr/0005-guardia-llm-prompt-injection.md) | Guardia de entrada y salida del LLM contra prompt injection |
 
 ## Deploy (Render, plan free)
 
@@ -166,6 +168,10 @@ Dos cosas honestas del plan free:
 1. `DEMO_CODE` como primera pantalla.
 2. Presupuesto duro de mensajes: 30 por sesión, 600 por día, con contador en memoria/SQLite que pausa el bot.
 3. Key de DeepSeek dedicada con saldo bajo, para que el techo de gasto sea real.
+4. El texto del LLM no sale sin pasar por la guardia de `app/llm.py`: pregunta delimitada y
+   recortada, y respuesta descartada si inventa enlace, teléfono, monto o promesa. El modelo no
+   tiene herramientas: no puede agendar ni cancelar. Detalle y límites en el
+   [ADR 0005](docs/adr/0005-guardia-llm-prompt-injection.md).
 
 ## Roadmap
 
