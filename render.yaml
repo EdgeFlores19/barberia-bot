@@ -1,4 +1,4 @@
-# Render (plan free) — sin Docker: runtime python nativo.
+# Render (plan Starter con disco persistente, ADR 0006) — sin Docker: runtime python nativo.
 # Los secretos NO van aquí; se definen en el panel y este archivo solo los declara.
 services:
   - type: web
