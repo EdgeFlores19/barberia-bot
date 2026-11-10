@@ -50,6 +50,8 @@ class Sesion:
     telefono: str = ""                      # tal como lo manda el canal
     ultima_actividad: datetime = field(default_factory=reloj.ahora)
     handoff_avisado: bool = False           # ya se avisó a la manicurista en este handoff
+    sin_avance: int = 0                     # respuestas del LLM que no movieron el paso
+    dia_sugerido: int | None = None          # día pedido en el turno anterior
 
 
 SESIONES: dict[str, Sesion] = {}
@@ -143,6 +145,23 @@ def bienvenida(datos: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 # ---------- disponibilidad ----------
+def _por_dia(libres: list[str], n: int = 6) -> list[str]:
+    """Primer hueco de cada día, para que el menú no muestre solo el día de hoy."""
+    vistos: list[str] = []
+    for i in libres:
+        if i[:10] not in {v[:10] for v in vistos}:
+            vistos.append(i)
+        if len(vistos) == n:
+            break
+    return vistos
+
+
+def _huecos_dia(datos: dict[str, Any], servicio_id: str, dia: int) -> list[str]:
+    """Todos los huecos del próximo `dia` (0=lunes), sin el tope de 24 de la lista corta."""
+    todas = horarios.generar_slots(datos, servicio_id, store.confirmadas(), reloj.ahora(), limite=1000)
+    return [i for i in todas if datetime.fromisoformat(i).weekday() == dia]
+
+
 def slots_disponibles(
     datos: dict[str, Any],
     servicio_id: str,
@@ -176,6 +195,179 @@ def _elegir_slot(libres: list[str], txt: str, texto: str) -> str | None:
     if txt.isdigit() and 1 <= int(txt) <= len(libres):
         return libres[int(txt) - 1]
     return None
+
+
+# ---------- interpretación de texto libre ----------
+# El cliente escribe "manicura y pedicura el miércoles a las 6". El menú solo
+# entiende ids y números, así que sin esto cada frase caía al LLM y el paso se
+# quedaba en `inicio`: el bot repetía la misma pregunta y nunca agendaba.
+_STOPWORDS = {
+    "de", "del", "la", "el", "los", "las", "y", "o", "para", "con", "por",
+    "menores", "quiero", "solo", "sólo", "un", "una", "mi", "me", "favor",
+}
+_PALABRAS_INFO = {
+    "precio", "precios", "cuesta", "cuestan", "cobran", "cuanto", "coste", "vale",
+}
+_PALABRAS_HORARIO = {
+    "horario", "horarios", "abren", "cierran", "abierto", "cerrado", "ubicacion",
+    "direccion", "donde", "estacionamiento", "pago", "tarjeta", "efectivo",
+}
+_DIAS_TOKEN = {
+    "lunes": 0, "lun": 0,
+    "martes": 1, "mar": 1,
+    "miercoles": 2, "mie": 2, "mierc": 2,
+    "jueves": 3, "jue": 3,
+    "viernes": 4, "vie": 4,
+    "sabado": 5, "sab": 5,
+    "domingo": 6, "dom": 6,
+}
+RE_HORA_A = re.compile(
+    r"\ba\s+las\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|hrs|h|"
+    r"de la tarde|de la noche|de la manana)?"
+)
+RE_HORA_B = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|hrs)\b")
+RE_HORA_C = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+
+
+def _tokens(texto: str) -> set[str]:
+    return {
+        w for w in re.split(r"[^a-z0-9]+", _norm(texto))
+        if len(w) > 2 and w not in _STOPWORDS
+    }
+
+
+def _detectar_servicio(texto: str, datos: dict[str, Any]) -> str | None:
+    """Deduce el servicio por nombre o alias: 'gelish', 'manicura y pedicura'…
+
+    Puntúa cuántas palabras del nombre aparecen en el mensaje, así que
+    'manicura y pedicura' prefiere el combo sobre la manicura sola.
+    """
+    dicho = _tokens(texto)
+    if not dicho:
+        return None
+    mejor: str | None = None
+    mejor_clave = (0.0, 0.0)
+    for sv in datos["servicios"]:
+        del_id = {w for w in re.split(r"[^a-z0-9]+", _norm(sv["id"])) if len(w) > 2}
+        propio = _tokens(sv["nombre"]) | del_id
+        if not propio:
+            continue
+        comunes = propio & dicho
+        if not comunes:
+            continue
+        # el nombre manda; el id desempata ("pedicura" gana a "manicura_pedicura")
+        clave = (len(comunes) / len(propio), len(del_id & dicho) / len(del_id) if del_id else 0.0)
+        if clave > mejor_clave:
+            mejor, mejor_clave = sv["id"], clave
+    return mejor
+
+
+def _hora_hhmm(texto: str) -> str | None:
+    """Extrae '18:00' de 'a las 6 pm', '6:30', '6 de la tarde'…"""
+    for m in RE_HORA_A.finditer(texto):
+        hh, mm, suf = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "")
+        if m.group(3) is None and m.group(2) is None:
+            # "a las 6" sin sufijo: en una barbería que abre a las 10 es la tarde
+            if 1 <= hh <= 9:
+                hh += 12
+            else:
+                continue
+        if suf in {"pm", "de la tarde", "de la noche"} and hh < 12:
+            hh += 12
+        elif suf == "am" and hh == 12:
+            hh = 0
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return f"{hh:02d}:{mm:02d}"
+    for m in RE_HORA_B.finditer(texto):
+        hh, mm, suf = int(m.group(1)), int(m.group(2) or 0), m.group(3)
+        if suf == "pm" and hh < 12:
+            hh += 12
+        elif suf == "am" and hh == 12:
+            hh = 0
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return f"{hh:02d}:{mm:02d}"
+    for m in RE_HORA_C.finditer(texto):
+        hh, mm = int(m.group(1)), int(m.group(2))
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return f"{hh:02d}:{mm:02d}"
+    return None
+
+
+def _detectar_dia_hora(texto: str) -> tuple[int | None, str | None]:
+    """(día de la semana 0-6, 'HH:MM') de un mensaje en lenguaje natural."""
+    t = _norm(texto)
+    dia = None
+    for w in re.split(r"[^a-z0-9]+", t):
+        if w in _DIAS_TOKEN:
+            dia = _DIAS_TOKEN[w]
+            break
+    if dia is None:
+        hoy = reloj.ahora()
+        if re.search(r"\bmanana\b", t):
+            dia = (hoy + timedelta(days=1)).weekday()
+        elif re.search(r"\bhoy\b", t):
+            dia = hoy.weekday()
+    return dia, _hora_hhmm(t)
+
+
+def _preferir_slot(libres: list[str], dia: int | None, hora: str | None) -> str | None:
+    """Hueco más cercano a lo que el cliente pidió (día y/o hora ±30 min)."""
+    if dia is None and hora is None:
+        return None
+    objetivo = None
+    if hora:
+        hh, mm = (int(x) for x in hora.split(":"))
+        objetivo = hh * 60 + mm
+    candidatos: list[tuple[int, str]] = []
+    for iso in libres:
+        try:
+            d = datetime.fromisoformat(iso)
+        except ValueError:
+            continue
+        if dia is not None and d.weekday() != dia:
+            continue
+        delta = 0
+        if objetivo is not None:
+            delta = abs((d.hour * 60 + d.minute) - objetivo)
+            if delta > 30:
+                continue
+        candidatos.append((delta, iso))
+    if not candidatos:
+        return None
+    candidatos.sort()
+    return candidatos[0][1]
+
+
+def _hora_legible(hhmm: str) -> str:
+    """'18:00' → '6:00 pm', para hablarle igual que el cliente."""
+    try:
+        hh, mm = (int(x) for x in hhmm.split(":"))
+    except ValueError:
+        return hhmm
+    suf = "am" if hh < 12 else "pm"
+    return f"{hh % 12 or 12}:{mm:02d} {suf}"
+
+
+def _cercanos(libres: list[str], dia: int | None, hora: str | None, n: int = 6) -> list[str]:
+    """Huecos más parecidos a lo pedido, priorizando el mismo día y la hora."""
+    objetivo = None
+    if hora:
+        try:
+            hh, mm = (int(x) for x in hora.split(":"))
+            objetivo = hh * 60 + mm
+        except ValueError:
+            objetivo = None
+
+    def dist(iso: str) -> int:
+        try:
+            d = datetime.fromisoformat(iso)
+        except ValueError:
+            return 10 ** 6
+        dd = abs(d.weekday() - dia) * 1440 if dia is not None else 0
+        dt = abs((d.hour * 60 + d.minute) - objetivo) if objetivo is not None else 0
+        return dd + dt
+
+    return sorted(libres, key=lambda i: (dist(i), i))[:n]
 
 
 def _resumen_cita(cita: dict[str, Any], datos: dict[str, Any]) -> str:
@@ -350,7 +542,7 @@ async def _flujo(
     if s.paso == "agendar_servicio":
         return _paso_servicio(s, txt, datos)
     if s.paso == "agendar_slot":
-        return _paso_slot(s, txt, texto, datos)
+        return await _paso_slot(s, txt, texto, datos)
     if s.paso == "agendar_nombre":
         return await _paso_nombre(s, texto, datos)
     if s.paso == "citas_folio":
@@ -387,13 +579,117 @@ async def _paso_inicio(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
         return [_t(f"Listo, le paso tu conversación a la manicurista. Si urge, marca al {datos['telefono']}."),
                 _b("¿Algo más mientras?", MENU)], s
 
-    # texto libre → LLM anclado
+    # texto libre: primero intenta cerrar la agenda sin depender del LLM
+    palabras = _tokens(texto)
+    es_info = bool(palabras & _PALABRAS_INFO) or bool(palabras & _PALABRAS_HORARIO)
+    sid = None if es_info else _detectar_servicio(texto, datos)
+    dia, hora = _detectar_dia_hora(texto)
+
+    if sid:
+        return _agendar_directo(s, sid, dia, hora, datos)
+    if not es_info and (dia is not None or hora is not None):
+        # habló de día/hora pero no dijo servicio: pregunta solo eso
+        s.sin_avance = 0
+        if dia is not None:
+            s.dia_sugerido = dia      # no se pierde: al elegir servicio se usa
+        return _ofrecer_servicios(s, datos)
+    if not es_info and s.sin_avance == 0 and (txt in _CORTESIA or (palabras and palabras <= _NO_NOMBRE)):
+        # "sí", "gracias", "ok": cortesía, no hace falta el LLM
+        s.sin_avance = 0
+        return [_t("¡Con gusto! Aquí sigo cuando quieras."),
+                _b("¿Algo más?", MENU)], s
+    if s.sin_avance >= 1 and not es_info:
+        # Ya contestó con prosa y el cliente sigue sin avanzar: corta el bucle.
+        s.sin_avance = 0
+        s.paso = "agendar_servicio"
+        opts = [(x["id"], f"{x['nombre']} · ${x['precio']}") for x in datos["servicios"]]
+        return [_t("Para no dar vueltas: elige un servicio y te paso los horarios."),
+                _b("¿Qué servicio te haces?", opts)], s
+
+    if not es_info:
+        s.sin_avance += 1          # esta respuesta no movió el paso
     r = await llm.responder(texto, datos)
     if r["fuente"] == "fallback":
         return [_t(r["texto"]), _b("¿Qué prefieres?", MENU)], s
     s.resuelta = True
     extra = [("agendar", "Agendar cita")] if r["fuente"] == "llm" else []
     return [_t(r["texto"]), _b("¿Algo más?", extra + MENU)], s
+
+
+_CORTESIA = {
+    "si", "sale", "ok", "okay", "va", "dale", "claro", "perfecto", "gracias",
+    "muchas gracias", "listo", "bueno", "buenas", "nada", "nada mas",
+}
+
+
+_NO_NOMBRE = {
+    "si", "no", "ok", "okay", "va", "dale", "claro", "perfecto", "gracias",
+    "esa", "ese", "eso", "la", "el", "las", "los", "de", "del", "por", "favor",
+    "mejor", "quiero", "agenda", "agendame", "aparta", "apartame", "cita",
+    "hora", "horario", "manana", "hoy", "bueno", "buenas", "hola",
+}
+
+
+def _limpiar_nombre(texto: str, datos: dict[str, Any]) -> str:
+    """'Brenda Pérez, manicura, 6 pm' → 'Brenda Pérez'. '' si no parece un nombre."""
+    partes = [p.strip() for p in re.split(r"[,\n;]", texto) if p.strip()]
+    nombre = partes[0] if len(partes) > 1 and _detectar_servicio(texto, datos) else texto
+    nombre = nombre.strip()[:60]
+    if _detectar_dia_hora(nombre)[0] is not None or _hora_hhmm(nombre):
+        return ""                                  # "sí, la de las 6" no es nombre
+    if not [w for w in _tokens(nombre) if w not in _NO_NOMBRE]:
+        return ""
+    return nombre
+
+
+def _agendar_directo(
+    s: Sesion, sid: str, dia: int | None, hora: str | None, datos: dict[str, Any]
+):
+    """Arranca la cita desde una frase libre, saltando preguntas ya contestadas."""
+    s.sin_avance = 0
+    s.servicio_id = sid
+    s.paso = "agendar_slot"
+    libres = slots_disponibles(datos, sid)
+    if not libres:
+        s.paso = "inicio"
+        s.handoff = True
+        return [_t("No me quedan huecos en los próximos 7 días. Te paso con la manicurista para ver si abre un espacio.")], s
+    sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0, "minutos": 30}
+    if dia is not None:
+        s.dia_sugerido = dia
+        del_dia = _huecos_dia(datos, sid, dia)
+        if del_dia:
+            libres = del_dia
+    elegido = _preferir_slot(libres, dia, hora) if hora is not None else None
+    if elegido:
+        s.slot = elegido
+        s.paso = "agendar_nombre"
+        return [_t(f"{sv['nombre']} · {_etiqueta_slot(elegido)}. ¿A nombre de quién queda?")], s
+    if dia is not None or hora is not None:
+        pedido = " ".join(
+            x for x in (DIAS[dia] if dia is not None else "",
+                        f"a las {_hora_legible(hora)}" if hora else "") if x
+        )
+        cabecera = f"No tengo {pedido}. Lo más cercano:"
+        opciones = _cercanos(libres, dia, hora)
+        if dia is not None and hora is None and any(
+            datetime.fromisoformat(i).weekday() == dia for i in libres
+        ):
+            cabecera = f"El {DIAS[dia]} tengo:"
+            opciones = libres[:8]
+    else:
+        d = s.dia_sugerido
+        del_dia = _huecos_dia(datos, sid, d) if d is not None else []
+        if del_dia and d is not None:
+            cabecera = (f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min). "
+                        f"El {DIAS[d]} tengo:")
+            opciones = del_dia[:8]
+        else:
+            cabecera = f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min). ¿Qué día te queda bien?"
+            opciones = _por_dia(libres)
+    return [_b(cabecera,
+               [(i, _etiqueta_slot(i)) for i in opciones]
+               + [("humano", "Otra fecha / hablar con la manicurista")])], s
 
 
 def _ofrecer_servicios(s: Sesion, datos: dict[str, Any]):
@@ -411,6 +707,11 @@ def _paso_servicio(s: Sesion, txt: str, datos: dict[str, Any]):
     if txt.isdigit() and 1 <= int(txt) <= len(datos["servicios"]):
         sid = datos["servicios"][int(txt) - 1]["id"]
     if not sid:
+        # frase libre: "manicura y pedicura el miércoles a las 6"
+        sid = _detectar_servicio(txt, datos)
+        if sid:
+            dia, hora = _detectar_dia_hora(txt)
+            return _agendar_directo(s, sid, dia, hora, datos)
         return _ofrecer_servicios(s, datos)
 
     s.servicio_id = sid
@@ -421,26 +722,83 @@ def _paso_servicio(s: Sesion, txt: str, datos: dict[str, Any]):
         s.handoff = True
         return [_t("No me quedan huecos en los próximos 7 días. Te paso con la manicurista para ver si abre un espacio.")], s
     sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0, "minutos": 30}
+    d = s.dia_sugerido
+    del_dia = _huecos_dia(datos, sid, d) if d is not None else []
+    if del_dia and d is not None:
+        return [_b(f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min). El {DIAS[d]} tengo:",
+                   [(i, _etiqueta_slot(i)) for i in del_dia[:8]]
+                   + [("humano", "Otra fecha / hablar con la manicurista")])], s
     return [_b(f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min).\n¿Qué día te queda bien?",
-               [(i, _etiqueta_slot(i)) for i in libres[:8]] + [("humano", "Otra fecha / hablar con la manicurista")])], s
+               [(i, _etiqueta_slot(i)) for i in _por_dia(libres)] + [("humano", "Otra fecha / hablar con la manicurista")])], s
 
 
-def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
+async def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     sid = s.servicio_id or datos["servicios"][0]["id"]
     libres = slots_disponibles(datos, sid)
-    elegido = _elegir_slot(libres, txt, texto)
-    if elegido is None:
-        if not libres:
-            return _paso_servicio(s, sid, datos)
-        return [_b("Ese horario ya no está. Elige otro:",
-                   [(i, _etiqueta_slot(i)) for i in libres[:8]])], s
-    s.slot = elegido
-    s.paso = "agendar_nombre"
-    return [_t("Apartado. ¿A nombre de quién queda?")], s
+    dia, hora = _detectar_dia_hora(texto)
+    if dia is not None:
+        s.dia_sugerido = dia
+    dia_pedido = dia if dia is not None else s.dia_sugerido
+    del_dia = _huecos_dia(datos, sid, dia_pedido) if dia_pedido is not None else []
+    base = del_dia or libres
+    # lo que el cliente ve es lo que puede escribir como número
+    if del_dia and hora is None:
+        visibles = base[:8]
+    elif dia is not None or hora is not None or (del_dia and dia_pedido is not None):
+        visibles = _cercanos(base, dia_pedido, hora)
+    else:
+        visibles = _por_dia(base)
+
+    elegido = _elegir_slot(visibles, txt, texto)
+    if elegido is None and hora is not None:
+        elegido = _preferir_slot(base, dia_pedido, hora)
+    if elegido is not None:
+        s.slot = elegido
+        if s.nombre:
+            return await _paso_nombre(s, s.nombre, datos)
+        s.paso = "agendar_nombre"
+        return [_t("Apartado. ¿A nombre de quién queda?")], s
+
+    if not libres:
+        return _paso_servicio(s, sid, datos)
+    # preguntó precio en vez de un horario: contesta y deja el menú
+    if any(k in txt for k in ("cuanto", "cuesta", "precio", "vale", "cobran")):
+        sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0, "minutos": 30}
+        return [_b(f"{sv['nombre']} cuesta ${sv['precio']} ({sv['minutos']} min). "
+                   "¿Qué horario te aparto?",
+                   [(i, _etiqueta_slot(i)) for i in visibles]
+                   + [("humano", "Otra fecha / hablar con la manicurista")])], s
+    # nombró otro servicio en vez de un horario: cambia y vuelve a ofrecer
+    otro = _detectar_servicio(texto, datos)
+    if otro and otro != sid:
+        return _agendar_directo(s, otro, dia, hora, datos)
+
+    if dia is not None and hora is None:
+        aviso = f"El {DIAS[dia]} tengo:"
+    elif dia is not None or hora is not None:
+        pedido = " ".join(
+            x for x in (DIAS[dia] if dia is not None else "",
+                        f"a las {_hora_legible(hora)}" if hora else "") if x
+        )
+        aviso = f"No tengo {pedido}. Lo más cercano:"
+    elif del_dia and dia_pedido is not None:
+        aviso = f"El {DIAS[dia_pedido]} tengo:"
+    else:
+        aviso = "Elige el horario que te acomode:"
+    # ¿en vez de un horario dio su nombre? Guárdalo y pide solo el horario
+    posible = _limpiar_nombre(texto, datos)
+    if posible and len(posible.split()) <= 3 and all(
+        w.isalpha() for w in posible.split()
+    ):
+        s.nombre = posible
+        aviso = f"Va, {posible}. Nada más elige el horario:"
+    return [_b(aviso,
+               [(i, _etiqueta_slot(i)) for i in visibles]
+               + [("humano", "Otra fecha / hablar con la manicurista")])], s
 
 
 async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
-    nombre = texto.strip()[:60]
+    nombre = _limpiar_nombre(texto, datos)
     if len(nombre) < 2:
         return [_t("Dame un nombre para la cita, por favor.")], s
     sid = s.servicio_id or ""
@@ -471,6 +829,7 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     s.nombre = nombre
     s.folio = cita["folio"]
     s.paso = "fin"
+    s.dia_sugerido = None          # el día pedido era para esta cita; no arrastrarlo
     s.resuelta = True
     sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0}
     horas = datos["reglas_agenda"]["cancelacion_libre_hasta_horas"]
