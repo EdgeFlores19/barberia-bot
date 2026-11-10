@@ -1,6 +1,6 @@
 # ADR 0002 — Persistencia en producción: SQLite efímera aceptada como demo
 
-- **Estado:** aceptado
+- **Estado:** reemplazado por el [ADR 0006](0006-disco-persistente-starter.md) (2026-11-09)
 - **Fecha:** 2026-11-01
 - **Alcance:** qué se hace con `barberia.db` mientras el bot siga en el plan free de Render.
 - **Decisión del dueño:** mantener la base efímera y tratar el despliegue como demo, sin pagar

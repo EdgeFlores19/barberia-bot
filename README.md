@@ -3,7 +3,7 @@
 [![tests](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml/badge.svg)](https://github.com/EdgeFlores19/barberia-bot/actions/workflows/tests.yml)
 
 **Demo en vivo:** <https://navajazo-bot.onrender.com> · el código de acceso se da bajo petición
-*(plan free: si estuvo dormida, la primera carga tarda ~50 s)*
+*(plan Starter: el servicio no se duerme; la primera carga tras un deploy puede tardar unos segundos)*
 
 Asistente conversacional para un estudio de uñas en Aguascalientes: responde preguntas frecuentes, agenda citas
 y pasa la conversación a una persona cuando hace falta. Es un **proyecto muestra**: no está
@@ -127,9 +127,10 @@ HMAC de Meta, y `GET /health` publica el diagnóstico en vivo (`posts`, `eventos
 `envios_fallidos`, `firma_rechazada`, `ultimo_codigo_envio`) sin guardar teléfonos ni texto de
 clientes. Sin las variables `WA_*` el canal queda apagado y el `GET` del webhook responde 403.
 
-Sigue siendo **canal de prueba**: el número es el de test de Meta, ambas funciones de WhatsApp
-están en "Listo para prueba" (sin App Review no se atiende a clientes reales), el disco es efímero
-y el servicio duerme. Lo que falta para operar de verdad está en los issues del repo.
+Sigue siendo **canal de prueba**: el número es el de test de Meta y ambas funciones de WhatsApp
+están en "Listo para prueba" (sin App Review no se atiende a clientes reales). El servicio ya corre
+en plan Starter con disco persistente (ver [ADR 0006](docs/adr/0006-disco-persistente-starter.md)).
+Lo que falta para operar de verdad está en los issues del repo.
 
 ### Decisiones de diseño
 
@@ -140,8 +141,9 @@ y el servicio duerme. Lo que falta para operar de verdad está en los issues del
 | [`0003`](docs/adr/0003-marca-ambar.md) | La marca es **Ambar**: qué se renombra y qué se conserva |
 | [`0004`](docs/adr/0004-datos-reales-solo-legales.md) | Datos reales del negocio solo en privacidad y condiciones |
 | [`0005`](docs/adr/0005-guardia-llm-prompt-injection.md) | Guardia de entrada y salida del LLM contra prompt injection |
+| [`0006`](docs/adr/0006-disco-persistente-starter.md) | Plan Starter con disco persistente: reemplaza la decisión del ADR 0002 |
 
-## Deploy (Render, plan free)
+## Deploy (Render, plan Starter)
 
 El blueprint `render.yaml` define el servicio. Los secretos se capturan en el panel, nunca
 en el repo:
@@ -154,14 +156,21 @@ en el repo:
 | `MAX_MENSAJES_POR_SESION` | `30` |
 | `MAX_MENSAJES_POR_DIA` | `600` |
 | `SEED_DEMO` | `1` |
+| `DB_FILE` | `/var/data/ambar.db` (dentro del disco; si se omite, la base se pierde en cada deploy) |
 | `GOOGLE_CALENDAR_ID` | vacío: el token de Calendar es personal y no se publica |
 
-Dos cosas honestas del plan free:
+Qué cambió con el plan Starter y el disco:
 
-1. **El servicio duerme** tras ~15 min sin tráfico; el primer mensaje tarda unos segundos en despertarlo.
-2. **No hay disco persistente**: cada reinicio crea una base nueva y siembra las dos citas de
-   ejemplo. Los folios creados en la demo no sobreviven al reinicio. Para citas duraderas haría
-   falta un plan con disco o Postgres.
+1. **El servicio ya no duerme.** Antes, tras ~15 min sin tráfico, el primer webhook de Meta llegaba
+   a un proceso dormido y la respuesta se perdía; ahora el proceso queda arriba.
+2. **La base sobrevive.** SQLite vive en `/var/data` (disco de 1 GB, $0.25/mes), así que las citas
+   agendadas en una prueba siguen ahí en el siguiente deploy. `SEED_DEMO` solo siembra cuando la
+   agenda está vacía, de modo que no vuelve a meter citas de ejemplo encima de las reales.
+3. **El costo del disco es el deploy con caída.** Con disco adjunto, Render no puede hacer deploys
+   de cero-downtime: hay unos segundos fuera de línea en cada deploy. Aceptable para un bot; no lo
+   hagas en hora pico.
+4. **El plan se declara en el blueprint.** `render.yaml` dice `plan: starter` a propósito: si dijera
+   `free`, el siguiente sync intentaría bajar el servicio y Render **borra el disco** al hacerlo.
 
 ## Controles de acceso (es una demo pública)
 

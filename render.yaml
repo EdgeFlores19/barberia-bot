@@ -4,7 +4,12 @@ services:
   - type: web
     name: navajazo-bot
     runtime: python
-    plan: free
+    # Starter (0.5 CPU / 512 MB, ~$7/mes). Dos razones, no una: los servicios
+    # free se duermen a los 15 min sin tráfico (Meta reintenta y el primer
+    # mensaje se pierde) y el disco persistente solo existe en planes de pago.
+    # Si este archivo dice `free`, el próximo sync del Blueprint puede intentar
+    # bajar el servicio y Render descarta el disco al hacerlo.
+    plan: starter
     region: oregon
     # Desplegar al hacer push a la rama de producción, pero solo si el CI (GitHub
     # Actions, workflow "tests") salió en verde. `autoDeploy: true` es el nombre
@@ -14,6 +19,15 @@ services:
     # Render inyecta $PORT; uvicorn debe escuchar en 0.0.0.0 para ser alcanzable.
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
+    # Disco persistente: el sistema de archivos del contenedor se borra en cada
+    # deploy, reinicio o (antes) siesta. Sin esto, SQLite nace vacío y el bot
+    # "olvida" las citas. 1 GB es de sobra: una cita ocupa ~200 bytes y el
+    # precio es $0.25/GB/mes. Con disco adjunto, los deploys dejan de ser
+    # cero-downtime: hay unos segundos de caída, aceptable para un bot.
+    disk:
+      name: ambar-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
@@ -31,6 +45,10 @@ services:
         value: 600
       - key: SEED_DEMO
         value: 1
+      # SQLite vive en el disco montado. Si esta ruta apunta fuera de /var/data
+      # (o falta), la base regresa al árbol del repo y se pierde en cada deploy.
+      - key: DB_FILE
+        value: /var/data/ambar.db
       # Google Calendar apagado a propósito: el token es personal.
       - key: GOOGLE_CALENDAR_ID
         value: ""

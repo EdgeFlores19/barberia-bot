@@ -1,9 +1,9 @@
 """Citas de ejemplo para que la demo nunca arranque vacía.
 
-En el plan free de Render el disco es efímero: cada vez que el servicio se
-apaga, SQLite nace vacío. Sembrar un par de citas lejanas deja ver de
+Con disco persistente (ADR 0006) la base sobrevive a los deploys, así que esto
+solo actúa la primera vez: siembra un par de citas lejanas para que se vea de
 inmediato que la agenda "tiene vida" sin robar los horarios que el visitante
-verá primero en el flujo de agendar.
+verá primero en el flujo de agendar. Si el disco se pierde, vuelve a sembrar.
 
 Es idempotente: si ya hay cualquier cita, no toca nada.
 """
