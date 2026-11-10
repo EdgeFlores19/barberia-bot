@@ -7,6 +7,7 @@ from datetime import timedelta
 import pytest
 
 from app import engine, reloj, store
+from tests.telefonos import TEL_A
 
 pytestmark = pytest.mark.usefixtures("bd")
 
@@ -90,3 +91,52 @@ def test_menu_reinicia_y_un_nuevo_handoff_vuelve_a_avisar(datos, avisos_enviados
 
     assert len(avisos_enviados) == 2
     assert _contar_handoffs() == 2
+
+
+def test_volver_al_bot_sin_menu_y_pedir_humano_otra_vez_avisa_de_nuevo(datos, avisos_enviados):
+    """Regresión: tras un handoff, seguir con el bot (sin escribir 'menu') y volver a pedir
+    una persona dejaba el segundo aviso sin mandar, aunque el cliente leía 'ya le pasé tu
+    conversación'."""
+    _decir("u7", "humano", datos)
+    _decir("u7", "precios", datos)
+    _decir("u7", "humano", datos)
+
+    assert len(avisos_enviados) == 2
+    assert _contar_handoffs() == 2
+
+
+def test_sin_huecos_y_luego_humano_avisa_dos_veces(datos, avisos_enviados, monkeypatch):
+    """El handoff por 'sin huecos' deja al bot activo (paso inicio) con el flag arriba;
+    un 'humano' posterior es otra petición y también debe avisar."""
+    monkeypatch.setattr(engine, "slots_disponibles", lambda *a, **k: [])
+    _decir("u8", "agendar", datos)
+    _decir("u8", datos["servicios"][0]["id"], datos)
+
+    _decir("u8", "humano", datos)
+
+    assert len(avisos_enviados) == 2
+    assert _contar_handoffs() == 2
+
+
+def test_seguir_en_humano_por_whatsapp_no_repite_el_aviso(datos, avisos_enviados):
+    """En WhatsApp el bot calla mientras la manicurista tiene la conversación: pedir una
+    persona de nuevo ahí es el mismo episodio y no genera otro aviso."""
+    sid = f"wa:{TEL_A}"
+    for texto in ("humano", "gracias", "persona"):
+        asyncio.run(engine.manejar(sid, texto, datos, canal="wa", telefono=TEL_A))
+
+    assert len(avisos_enviados) == 1
+    assert _contar_handoffs() == 1
+
+
+def test_tras_sin_huecos_seguir_con_el_bot_no_vuelve_a_avisar(datos, avisos_enviados, monkeypatch):
+    """El flag de 'sin huecos' no debe convertir cada mensaje siguiente en un aviso nuevo."""
+    monkeypatch.setattr(engine, "slots_disponibles", lambda *a, **k: [])
+    _decir("u10", "agendar", datos)
+    _decir("u10", datos["servicios"][0]["id"], datos)
+
+    _decir("u10", "precios", datos)
+    _decir("u10", "gracias", datos)
+
+    assert len(avisos_enviados) == 1
+    assert _contar_handoffs() == 1

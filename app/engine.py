@@ -162,6 +162,9 @@ def _huecos_dia(datos: dict[str, Any], servicio_id: str, dia: int) -> list[str]:
     return [i for i in todas if datetime.fromisoformat(i).weekday() == dia]
 
 
+_LIMITE_HUECOS = 1000
+
+
 def slots_disponibles(
     datos: dict[str, Any],
     servicio_id: str,
@@ -173,7 +176,11 @@ def slots_disponibles(
     if excluir_folio:
         # Al reagendar, su propio horario no debe bloquearse a sí mismo.
         citas = [c for c in citas if c["folio"] != excluir_folio]
-    return horarios.generar_slots(datos, servicio_id, citas, ahora or reloj.ahora())
+    # Sin tope práctico: con el límite por defecto (24) solo entraban hoy y mañana y el menú
+    # de días nunca mostraba el resto de la ventana. Cada pantalla recorta lo que muestra.
+    return horarios.generar_slots(
+        datos, servicio_id, citas, ahora or reloj.ahora(), limite=_LIMITE_HUECOS
+    )
 
 
 def _etiqueta_slot(iso: str) -> str:
@@ -447,6 +454,12 @@ async def manejar(
         # El TTL corto no reinicia `humano`: el bot no habla encima del barbero.
         s.paso, s.handoff = "inicio", False
 
+    # El flag solo vale mientras la conversación está en manos de la manicurista o en el
+    # turno en que se levantó (p. ej. "sin huecos" deja al bot activo con el flag arriba).
+    # Al empezar otro turno ya fuera de `humano`, ese handoff quedó atrás.
+    if s.handoff and s.paso != "humano":
+        s.handoff = False
+
     s.ultima_actividad = ahora
     s.mensajes += 1
     _purgar_sesiones()
@@ -474,13 +487,21 @@ async def manejar(
             return [_t("La demo llegó a su límite de mensajes por hoy. Escríbeme directo y seguimos: "
                        f"{datos['telefono']}.")], s
 
+    # ¿Ya estaba en manos de la manicurista antes de este mensaje? Si sí, un handoff que
+    # sigue activo es el mismo episodio y no se avisa otra vez; si no, es una petición nueva.
+    ya_en_humano = s.handoff and s.paso == "humano"
     respuestas, s = await _flujo(s, texto, txt, datos)
-    await _avisar_handoff(s, texto)
+    await _avisar_handoff(s, texto, ya_en_humano)
     return respuestas, s
 
 
-async def _avisar_handoff(s: Sesion, texto: str) -> None:
-    """Registra el handoff y avisa al dueño UNA vez por handoff, venga de donde venga.
+async def _avisar_handoff(s: Sesion, texto: str, ya_en_humano: bool = False) -> None:
+    """Registra el handoff y avisa al dueño UNA vez por episodio, venga de donde venga.
+
+    Un episodio termina cuando el cliente vuelve al bot (`paso` deja de ser `humano`). Antes
+    el aviso dependía de `handoff_avisado`, que solo se bajaba con `menu`/`hola`: si el
+    cliente seguía con el bot por otro camino y pedía una persona de nuevo, el bot le decía
+    "ya le pasé tu conversación" sin avisar a nadie.
 
     Antes solo avisaba la rama de "humano"/"persona". Pasar a la manicurista por una
     cancelación fuera de ventana, por falta de huecos o por la opción 5 le decía al
@@ -490,8 +511,8 @@ async def _avisar_handoff(s: Sesion, texto: str) -> None:
     if not s.handoff:
         s.handoff_avisado = False      # volvió al bot: el siguiente handoff avisa de nuevo
         return
-    if s.handoff_avisado:
-        return
+    if ya_en_humano and s.handoff_avisado:
+        return                         # mismo episodio: ya se avisó
     s.handoff_avisado = True
     store.registrar_handoff(s.sid, texto)
     # La red va en otro hilo: Telegram no debe bloquear el event loop.
@@ -534,6 +555,8 @@ async def _flujo(
         return _paso_citas_folio(s, folio_dicho, datos)
 
     if s.paso in {"fin", "humano"}:
+        if s.paso == "humano":
+            s.handoff = False          # el cliente siguió con el bot: termina el episodio
         s.paso = "inicio"
         return await _paso_inicio(s, txt, texto, datos)
 
@@ -750,6 +773,10 @@ async def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
         visibles = _por_dia(base)
 
     elegido = _elegir_slot(visibles, txt, texto)
+    if elegido is None and texto.strip() in base:
+        # Un botón o la API mandan el id ISO exacto, aunque no esté entre los que se
+        # muestran. El número escrito sigue mapeando solo a lo visible.
+        elegido = texto.strip()
     if elegido is None and hora is not None:
         elegido = _preferir_slot(base, dia_pedido, hora)
     if elegido is not None:

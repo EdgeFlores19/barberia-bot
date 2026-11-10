@@ -466,3 +466,20 @@ def test_un_calendar_lento_no_bloquea_otra_conversacion(datos, monkeypatch):
     assert asyncio.run(dos_a_la_vez()) < 0.5      # secuencial serían 0.6 s
 
 
+
+
+# ---------- el menú de días cubre toda la ventana de agenda ----------
+def test_slots_disponibles_cubre_toda_la_ventana_de_agenda(datos):
+    """Regresión: el tope de 24 huecos dejaba solo hoy y mañana, aunque la agenda abre 7 días."""
+    dias = {s[:10] for s in engine.slots_disponibles(datos, "manicura")}
+
+    assert len(dias) >= 5
+
+
+def test_menu_de_dias_ofrece_varios_dias_distintos(datos):
+    _enviar("d1", "agendar", datos)
+
+    respuestas, _ = _enviar("d1", "manicura", datos)
+
+    ids = [o["id"] for o in respuestas[0]["opciones"] if o["id"] != "humano"]
+    assert len({i[:10] for i in ids}) >= 5
