@@ -55,6 +55,11 @@ CALENDAR_TOKEN_FILE = os.getenv(
 )
 CALENDAR_TZ = os.getenv("CALENDAR_TZ", "America/Mexico_City")
 CALENDAR_TIMEOUT_S = float(os.getenv("CALENDAR_TIMEOUT_S", "8"))
+# Lectura de Calendar para que un evento puesto a mano bloquee ese horario en el bot.
+# Solo actúa si el espejo está habilitado; CALENDAR_BLOQUEO=0 lo apaga sin tocar el espejo.
+CALENDAR_BLOQUEO = os.getenv("CALENDAR_BLOQUEO", "1").strip() != "0"
+CALENDAR_BLOQUEO_TTL_S = float(os.getenv("CALENDAR_BLOQUEO_TTL_S", "60"))
+CALENDAR_BLOQUEO_REINTENTO_S = float(os.getenv("CALENDAR_BLOQUEO_REINTENTO_S", "120"))
 
 # Token de administración para GET /api/citas. Vacío = ruta deshabilitada (503).
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()

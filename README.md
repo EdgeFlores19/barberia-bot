@@ -42,10 +42,13 @@ Es la llave para ver, mover o cancelar la cita: en v1 no hay login.
 
 - **SQLite es la fuente de verdad** (`barberia.db`, configurable con `DB_FILE`). Los horarios
   ocupados, los folios y los estados (`confirmada` / `cancelada`) salen de ahí.
-- **Google Calendar es solo un espejo opcional.** Se activa con `GOOGLE_CALENDAR_ID` y
-  `GOOGLE_TOKEN_JSON`; si el token expira o la API falla, el bot sigue agendando igual y lo
-  anota en el log. Calendar no sabe de dobles reservas, así que nunca se usa para decidir
-  disponibilidad.
+- **Google Calendar es opcional y nunca puede tumbar una reserva.** Se activa con
+  `GOOGLE_CALENDAR_ID` y `GOOGLE_TOKEN_JSON`, y hace dos cosas: copia cada cita como evento
+  (espejo) y **lee los eventos que la manicurista anota a mano** para no ofrecer ese horario
+  (ADR 0007). Los eventos marcados como "libre", cancelados, rechazados o creados por el propio
+  bot no bloquean. Si el token expira o la API falla, el bot sigue agendando con lo que hay en
+  SQLite, lo anota en el log y avisa una vez por Telegram. `CALENDAR_BLOQUEO=0` apaga solo la
+  lectura.
 
 Fuera de v1 a propósito: pagos, promociones, lealtad, multi-sucursal, multi-estilista,
 recordatorios salientes 24 h antes y penalizaciones por cancelar.
@@ -94,7 +97,7 @@ app/
   slots.py     disponibilidad: horario del negocio, alto del servicio, huecos ocupados
   store.py     citas en SQLite: folio, doble reserva, cancelar y reagendar
   seed.py      citas de ejemplo cuando la agenda arranca vacía
-  calendar_sync.py  espejo opcional a Google Calendar (best-effort, por REST)
+  calendar_sync.py  Google Calendar opcional: espejo de citas y bloqueo de huecos (por REST)
   config.py    configuración por variables de entorno
 data/
   barberia.json   negocio, horario, reglas de agenda, servicios, FAQ
@@ -124,8 +127,10 @@ y las variables `WA_VERIFY_TOKEN`, `WA_APP_SECRET`, `WA_TOKEN`, `WA_PHONE_ID`.
 
 El canal está **encendido desde el 2026-11-01** (`WA_MODO=graph`): el webhook verifica la firma
 HMAC de Meta, y `GET /health` publica el diagnóstico en vivo (`posts`, `eventos`, `envios_ok`,
-`envios_fallidos`, `firma_rechazada`, `ultimo_codigo_envio`) sin guardar teléfonos ni texto de
-clientes. Sin las variables `WA_*` el canal queda apagado y el `GET` del webhook responde 403.
+`envios_fallidos`, `firma_rechazada`, `ultimo_codigo_envio`, y bajo `calendar.bloqueo` el estado de
+la lectura de eventos manuales: `activo`, `intervalos`, `edad_s`, `caido`, `ultimo_error`) sin
+guardar teléfonos ni texto de clientes. Sin las variables `WA_*` el canal queda apagado y el `GET`
+del webhook responde 403.
 
 Sigue siendo **canal de prueba**: el número es el de test de Meta y ambas funciones de WhatsApp
 están en "Listo para prueba" (sin App Review no se atiende a clientes reales). El servicio ya corre
@@ -142,6 +147,7 @@ Lo que falta para operar de verdad está en los issues del repo.
 | [`0004`](docs/adr/0004-datos-reales-solo-legales.md) | Datos reales del negocio solo en privacidad y condiciones |
 | [`0005`](docs/adr/0005-guardia-llm-prompt-injection.md) | Guardia de entrada y salida del LLM contra prompt injection |
 | [`0006`](docs/adr/0006-disco-persistente-starter.md) | Plan Starter con disco persistente: reemplaza la decisión del ADR 0002 |
+| [`0007`](docs/adr/0007-calendar-bloquea-huecos.md) | Los eventos manuales de Calendar bloquean huecos: se lee para bloquear, no para autorizar |
 
 ## Deploy (Render, plan Starter)
 
@@ -158,6 +164,7 @@ en el repo:
 | `SEED_DEMO` | `1` |
 | `DB_FILE` | `/var/data/ambar.db` (dentro del disco; si se omite, la base se pierde en cada deploy) |
 | `GOOGLE_CALENDAR_ID` | vacío: el token de Calendar es personal y no se publica |
+| `CALENDAR_BLOQUEO` / `CALENDAR_BLOQUEO_TTL_S` / `CALENDAR_BLOQUEO_REINTENTO_S` | `1` / `60` / `120` (solo aplican con Calendar habilitado) |
 
 Qué cambió con el plan Starter y el disco:
 

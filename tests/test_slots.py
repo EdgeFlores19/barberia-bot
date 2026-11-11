@@ -8,7 +8,7 @@ from __future__ import annotations
 import copy
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -321,3 +321,32 @@ def test_consistencia_generar_y_validar(datos: dict, servicio: str) -> None:
         if slot in libres:
             continue
         assert slots.validar(datos, servicio, slot, citas, AHORA)[0] is False, slot
+
+
+# ---------- bloqueos externos: una "cita" puede traer su propio fin ----------
+def test_un_bloqueo_con_fin_propio_ocupa_ese_intervalo_exacto(datos: dict) -> None:
+    bloqueo = {"slot": "2026-10-26T12:00", "fin": "2026-10-26T13:15", "estado": "confirmada"}
+
+    ocupados = slots._intervalos_ocupados(datos, [bloqueo])
+
+    assert ocupados == [(datetime(2026, 10, 26, 12, 0), datetime(2026, 10, 26, 13, 15))]
+
+
+def test_un_fin_invalido_o_anterior_cae_a_la_duracion_del_servicio(datos: dict) -> None:
+    citas = [
+        {"slot": "2026-10-26T12:00", "fin": "basura", "servicio_id": "manicura"},
+        {"slot": "2026-10-26T14:00", "fin": "2026-10-26T13:00", "servicio_id": "manicura"},
+    ]
+
+    ocupados = slots._intervalos_ocupados(datos, citas)
+
+    minutos = int(next(s for s in datos["servicios"] if s["id"] == "manicura")["minutos"])
+    assert [(f - i) for i, f in ocupados] == [timedelta(minutes=minutos)] * 2
+
+
+def test_validar_rechaza_un_slot_que_choca_con_un_bloqueo_externo(datos: dict) -> None:
+    bloqueo = {"slot": "2026-10-26T12:00", "fin": "2026-10-26T13:00", "estado": "confirmada"}
+
+    ok, motivo = slots.validar(datos, "manicura", "2026-10-26T12:30", [bloqueo], AHORA)
+
+    assert not ok and "ocupado" in motivo

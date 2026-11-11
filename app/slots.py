@@ -105,6 +105,19 @@ def _intervalos_ocupados(
             continue  # cita corrupta: no debe tumbar el cálculo
         if inicio.tzinfo is not None:  # normalizamos a naive (hora local)
             inicio = inicio.replace(tzinfo=None)
+        # Los bloqueos externos (eventos de Calendar) traen su propio fin; las citas no.
+        fin_txt = cita.get("fin")
+        if fin_txt:
+            try:
+                fin = datetime.fromisoformat(str(fin_txt))
+            except (TypeError, ValueError):
+                fin = None
+            if fin is not None:
+                if fin.tzinfo is not None:
+                    fin = fin.replace(tzinfo=None)
+                if fin > inicio:
+                    ocupados.append((inicio, fin))
+                    continue
         sv = catalogo.get(str(cita.get("servicio_id")))
         try:
             minutos = int(sv.get("minutos") or 0) if sv else 0

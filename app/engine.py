@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -16,6 +17,8 @@ from typing import Any
 from . import avisos, calendar_sync, config, llm, reloj, store
 from . import slots as horarios
 from .telefono import t10 as _t10
+
+log = logging.getLogger("ambar.engine")
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
@@ -163,9 +166,31 @@ def _por_dia(libres: list[str], n: int = 6) -> list[str]:
     return vistos
 
 
+def _ocupadas() -> list[dict[str, Any]]:
+    """Citas de SQLite más lo que la manicurista anotó a mano en Calendar (solo caché)."""
+    return store.confirmadas() + calendar_sync.bloqueos()
+
+
+async def _sincronizar_calendar(datos: dict[str, Any], forzar: bool = False) -> None:
+    """Relee Calendar si el caché venció (o siempre, con `forzar`). Nunca falla ni bloquea
+    el mensaje por mucho: sin Calendar el bot sigue con lo que hay en SQLite."""
+    if not calendar_sync.bloqueo_activo():
+        return
+    if not forzar and not calendar_sync.bloqueo_vencido():
+        return
+    try:
+        dias = int(datos["reglas_agenda"].get("dias_adelante", 7))
+    except (KeyError, TypeError, ValueError):
+        dias = 7
+    try:
+        await asyncio.to_thread(calendar_sync.refrescar_bloqueos, reloj.ahora(), dias, forzar)
+    except Exception:  # noqa: BLE001 — último cinturón: nada de Calendar tumba un mensaje
+        log.exception("fallo inesperado leyendo Calendar; sigo con lo que hay en SQLite")
+
+
 def _huecos_dia(datos: dict[str, Any], servicio_id: str, dia: int) -> list[str]:
     """Todos los huecos del próximo `dia` (0=lunes), sin el tope de 24 de la lista corta."""
-    todas = horarios.generar_slots(datos, servicio_id, store.confirmadas(), reloj.ahora(), limite=1000)
+    todas = horarios.generar_slots(datos, servicio_id, _ocupadas(), reloj.ahora(), limite=1000)
     return [i for i in todas if datetime.fromisoformat(i).weekday() == dia]
 
 
@@ -183,6 +208,7 @@ def slots_disponibles(
     if excluir_folio:
         # Al reagendar, su propio horario no debe bloquearse a sí mismo.
         citas = [c for c in citas if c["folio"] != excluir_folio]
+    citas = citas + calendar_sync.bloqueos()
     # Sin tope práctico: con el límite por defecto (24) solo entraban hoy y mañana y el menú
     # de días nunca mostraba el resto de la ventana. Cada pantalla recorta lo que muestra.
     return horarios.generar_slots(
@@ -497,6 +523,7 @@ async def manejar(
     # ¿Ya estaba en manos de la manicurista antes de este mensaje? Si sí, un handoff que
     # sigue activo es el mismo episodio y no se avisa otra vez; si no, es una petición nueva.
     ya_en_humano = s.handoff and s.paso == "humano"
+    await _sincronizar_calendar(datos)
     respuestas, s = await _flujo(s, texto, txt, datos)
     await _avisar_handoff(s, texto, ya_en_humano)
     return respuestas, s
@@ -840,7 +867,8 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     sid = s.servicio_id or ""
     slot = s.slot or ""
 
-    ok, motivo = horarios.validar(datos, sid, slot, store.confirmadas(), reloj.ahora())
+    await _sincronizar_calendar(datos, forzar=True)   # justo antes de apartar: lo manual de último momento
+    ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(), reloj.ahora())
     if not ok:
         s.paso = "agendar_slot"
         libres = slots_disponibles(datos, sid)
@@ -999,6 +1027,7 @@ async def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any
         s.paso = "inicio"
         return [_t("Esa cita ya no está activa."), _b("Menú:", MENU)], s
     sid = cita["servicio_id"]
+    await _sincronizar_calendar(datos, forzar=True)   # el nuevo horario se elige aquí
     libres = [x for x in slots_disponibles(datos, sid, excluir_folio=folio) if x != cita["slot"]]
 
     if txt in {"menu", "no", "asi", "dejar"}:

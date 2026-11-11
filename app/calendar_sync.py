@@ -1,10 +1,15 @@
-"""Espejo opcional en Google Calendar. Nunca bloquea una reserva.
+"""Google Calendar opcional: espejo de las citas y, en sentido contrario, bloqueo de huecos.
 
-Si falta GOOGLE_CALENDAR_ID, el token o la red, el bot agenda igual: SQLite es
-la fuente de verdad y Calendar es solo una copia para que la manicurista lo vea en
-su teléfono. Se usa REST directo (httpx) para no arrastrar google-api-python-client.
+Si falta GOOGLE_CALENDAR_ID, el token o la red, el bot agenda igual: SQLite es la fuente
+de verdad. Calendar hace dos cosas, y ninguna puede tumbar una reserva:
+  1. Espejo (bot -> Calendar): cada cita se copia como evento para verla en el teléfono.
+  2. Bloqueo (Calendar -> bot): lo que la manicurista anota a mano ahí ocupa ese horario
+     y el bot no lo ofrece. Se lee con events.list y se guarda en un caché corto; si la
+     lectura falla, el bot sigue con lo que sabe y avisa una vez (ver ADR 0007).
+Se usa REST directo (httpx) para no arrastrar google-api-python-client.
 
-Variables: GOOGLE_TOKEN_JSON, GOOGLE_CALENDAR_ID, CALENDAR_TZ.
+Variables: GOOGLE_TOKEN_JSON, GOOGLE_CALENDAR_ID, CALENDAR_TZ, CALENDAR_BLOQUEO,
+CALENDAR_BLOQUEO_TTL_S, CALENDAR_BLOQUEO_REINTENTO_S.
 """
 from __future__ import annotations
 
@@ -12,12 +17,13 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
-from . import config
+from . import avisos, config
 
 log = logging.getLogger("ambar.calendar")
 
@@ -25,6 +31,33 @@ _TOKEN: dict[str, Any] = {"access": "", "expira": 0.0}
 
 # Diagnóstico sin secretos: por qué no se está agendando. Sale en /health.
 _ESTADO: dict[str, Any] = {"intentos": 0, "ok": 0, "ultimo_error": ""}
+
+# Marca que lleva el evento espejo del propio bot: al leer Calendar se ignora, porque esa
+# cita ya está en SQLite (contarla dos veces estorbaría al mover una cita sobre sí misma).
+MARCA_BOT = "Reservado por el bot"
+
+
+class _SinAcceso(Exception):
+    """No hay access token para hablar con Calendar."""
+
+
+def _mono() -> float:
+    return time.monotonic()
+
+
+def _bloqueo_inicial() -> dict[str, Any]:
+    return {
+        "intervalos": [],      # [(inicio, fin)] naive, hora del negocio
+        "ok_ts": None,         # monotonic de la última lectura buena
+        "fallo_ts": None,      # monotonic del último fallo
+        "caido": False,
+        "alertado": False,
+        "ultimo_error": "",
+        "lecturas": 0,
+    }
+
+
+_BLOQ: dict[str, Any] = _bloqueo_inicial()
 
 
 def _anotar(motivo: str) -> None:
@@ -62,6 +95,7 @@ def salud() -> dict[str, Any]:
         "eventos_ok": _ESTADO["ok"],
         "problema_config": motivo,
         "ultimo_error": _ESTADO["ultimo_error"],
+        "bloqueo": _salud_bloqueo(),
     }
 
 
@@ -141,7 +175,7 @@ def _evento(cita: dict[str, Any], datos: dict[str, Any]) -> dict[str, Any]:
     fin = inicio + timedelta(minutes=minutos)
     return {
         "summary": f"{nombre_sv} · {cita['nombre']}",
-        "description": f"Folio {cita['folio']}. Reservado por el bot de {datos['nombre']}.",
+        "description": f"Folio {cita['folio']}. {MARCA_BOT} de {datos['nombre']}.",
         "location": datos.get("direccion", ""),
         "start": {"dateTime": inicio.isoformat(timespec="seconds"), "timeZone": config.CALENDAR_TZ},
         "end": {"dateTime": fin.isoformat(timespec="seconds"), "timeZone": config.CALENDAR_TZ},
@@ -214,3 +248,151 @@ def borrar(event_id: str | None) -> bool:
         log.warning("no se borró el evento %s: %s", event_id, e)
         _anotar(f"borrar {event_id}: {e}")
         return False
+
+
+# ---------------------------------------------------------------- bloqueo (Calendar -> bot)
+def bloqueo_activo() -> bool:
+    """¿Se leen los eventos de Calendar para bloquear huecos?"""
+    return habilitado() and config.CALENDAR_BLOQUEO
+
+
+def reiniciar_bloqueos() -> None:
+    """Vacía el caché y el estado del bloqueo (pruebas)."""
+    _BLOQ.clear()
+    _BLOQ.update(_bloqueo_inicial())
+
+
+def bloqueo_vencido() -> bool:
+    """¿Toca volver a leer? Solo mira el reloj: no hace red."""
+    ok = _BLOQ["ok_ts"]
+    return ok is None or _mono() - ok >= config.CALENDAR_BLOQUEO_TTL_S
+
+
+def _salud_bloqueo() -> dict[str, Any]:
+    ok = _BLOQ["ok_ts"]
+    return {
+        "activo": bloqueo_activo(),
+        "intervalos": len(_BLOQ["intervalos"]),
+        "lecturas": _BLOQ["lecturas"],
+        "edad_s": None if ok is None else round(_mono() - ok),
+        "caido": _BLOQ["caido"],
+        "ultimo_error": _BLOQ["ultimo_error"],
+    }
+
+
+def bloqueos() -> list[dict[str, Any]]:
+    """Lo que hay en el caché como citas ocupadas para app/slots.py. No hace red."""
+    if not bloqueo_activo():
+        return []
+    return [
+        {
+            "slot": ini.isoformat(timespec="minutes"),
+            "fin": fin.isoformat(timespec="minutes"),
+            "estado": "confirmada",
+            "bloqueo_externo": True,
+        }
+        for ini, fin in _BLOQ["intervalos"]
+    ]
+
+
+def _a_local(txt: str, tz: ZoneInfo) -> datetime:
+    """dateTime RFC 3339 de Google -> hora del negocio sin zona."""
+    dt = datetime.fromisoformat(str(txt).replace("Z", "+00:00"))
+    return dt.astimezone(tz).replace(tzinfo=None) if dt.tzinfo else dt
+
+
+def _intervalo_evento(ev: dict[str, Any], tz: ZoneInfo) -> tuple[datetime, datetime] | None:
+    """Intervalo que un evento le quita a la manicurista, o None si no la ocupa."""
+    if ev.get("status") == "cancelled" or ev.get("transparency") == "transparent":
+        return None                       # cancelado, o marcado como "libre" a propósito
+    if MARCA_BOT in str(ev.get("description") or ""):
+        return None                       # el espejo del bot: ya está en SQLite
+    for invitado in ev.get("attendees") or []:
+        if invitado.get("self") and invitado.get("responseStatus") == "declined":
+            return None
+    inicio, fin = ev.get("start") or {}, ev.get("end") or {}
+    try:
+        if inicio.get("dateTime"):
+            ini, fn = _a_local(inicio["dateTime"], tz), _a_local(fin["dateTime"], tz)
+        elif inicio.get("date"):          # todo el día: el `end` es exclusivo
+            ini = datetime.combine(date.fromisoformat(inicio["date"]), datetime.min.time())
+            fn = (
+                datetime.combine(date.fromisoformat(fin["date"]), datetime.min.time())
+                if fin.get("date") else ini + timedelta(days=1)
+            )
+        else:
+            return None
+    except (KeyError, ValueError):
+        return None                       # un evento raro no debe tumbar la lectura
+    return (ini, fn) if fn > ini else None
+
+
+def _listar_eventos(desde: datetime, hasta: datetime) -> list[dict[str, Any]]:
+    """events.list del calendario entre dos horas locales. Sin títulos: no se necesitan."""
+    cab = _cabeceras()
+    if not cab:
+        raise _SinAcceso()
+    tz = ZoneInfo(config.CALENDAR_TZ)
+    params = {
+        "timeMin": desde.replace(tzinfo=tz).isoformat(timespec="seconds"),
+        "timeMax": hasta.replace(tzinfo=tz).isoformat(timespec="seconds"),
+        "singleEvents": "true",           # expande los recurrentes
+        "orderBy": "startTime",
+        "maxResults": "250",
+        "fields": "nextPageToken,items(status,transparency,description,attendees(self,responseStatus),start,end)",
+    }
+    eventos: list[dict[str, Any]] = []
+    for _ in range(4):                    # tope de páginas: 8 días no llegan ni a una
+        r = httpx.get(_url(), params=params, headers=cab, timeout=config.CALENDAR_TIMEOUT_S)
+        r.raise_for_status()
+        cuerpo = r.json()
+        eventos += cuerpo.get("items", [])
+        if not cuerpo.get("nextPageToken"):
+            break
+        params["pageToken"] = cuerpo["nextPageToken"]
+    return eventos
+
+
+def _motivo(e: Exception) -> str:
+    """Causa del fallo SIN el texto de la excepción: lleva la URL con el id del calendario."""
+    if isinstance(e, httpx.HTTPStatusError):
+        return f"HTTP {e.response.status_code}"
+    return type(e).__name__
+
+
+def refrescar_bloqueos(ahora: datetime, dias: int, forzar: bool = False) -> bool:
+    """Relee Calendar y actualiza el caché. Síncrona: se llama con asyncio.to_thread.
+
+    `forzar` se salta el TTL (se usa al confirmar una cita), pero no el periodo de
+    reintento tras un fallo: con Calendar caído no se espera el timeout en cada mensaje.
+    Devuelve True si el caché quedó vigente.
+    """
+    if not bloqueo_activo():
+        return False
+    ahora_m = _mono()
+    if _BLOQ["fallo_ts"] is not None and ahora_m - _BLOQ["fallo_ts"] < config.CALENDAR_BLOQUEO_REINTENTO_S:
+        return False
+    if not forzar and not bloqueo_vencido():
+        return True
+    tz = ZoneInfo(config.CALENDAR_TZ)
+    try:
+        eventos = _listar_eventos(ahora, datetime.combine(ahora.date() + timedelta(days=dias + 1), datetime.min.time()))
+        intervalos = [i for i in (_intervalo_evento(e, tz) for e in eventos) if i]
+    except (httpx.HTTPError, ValueError, KeyError, _SinAcceso) as e:
+        _BLOQ["fallo_ts"] = ahora_m
+        _BLOQ["caido"] = True
+        _BLOQ["ultimo_error"] = _motivo(e)
+        log.warning("no se pudo leer Calendar (%s); se agenda con lo que hay en SQLite", _BLOQ["ultimo_error"])
+        if not _BLOQ["alertado"]:
+            _BLOQ["alertado"] = True
+            avisos.notificar_alerta(
+                "No pude leer tu Google Calendar. Mientras tanto el bot no sabe de los eventos "
+                "que anotes a mano y podría ofrecer un horario ocupado. Revisa /health."
+            )
+        return False
+    _BLOQ.update(intervalos=intervalos, ok_ts=ahora_m, fallo_ts=None, caido=False, ultimo_error="")
+    _BLOQ["lecturas"] += 1
+    if _BLOQ["alertado"]:
+        _BLOQ["alertado"] = False
+        avisos.notificar_alerta("Google Calendar volvió a responder: los eventos manuales vuelven a bloquear horarios.")
+    return True

@@ -16,7 +16,7 @@ Bot de citas por chat (demo web + canal de WhatsApp en construcción) para negoc
 | `app/engine.py` | Máquina de estados del bot (`async def manejar(...)`) |
 | `app/slots.py` | Disponibilidad de horarios. Puro y determinista: recibe `ahora` por parámetro |
 | `app/store.py` | SQLite (fuente de verdad de las citas) |
-| `app/calendar_sync.py` | Espejo opcional en Google Calendar (httpx síncrono: llamarlo con `asyncio.to_thread`) |
+| `app/calendar_sync.py` | Google Calendar opcional: espejo de citas y bloqueo de huecos por eventos manuales (httpx síncrono: la red va con `asyncio.to_thread`; `bloqueos()` solo lee el caché) |
 | `app/llm.py` | FAQ con DeepSeek + fallback local por tags |
 | `app/seed.py` | Citas de ejemplo para la demo |
 | `app/config.py` | Toda la configuración sale de variables de entorno |
