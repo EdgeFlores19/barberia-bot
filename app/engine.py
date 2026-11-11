@@ -773,9 +773,11 @@ async def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
         visibles = _por_dia(base)
 
     elegido = _elegir_slot(visibles, txt, texto)
-    if elegido is None and texto.strip() in base:
+    if elegido is None and texto.strip() in libres:
         # Un botón o la API mandan el id ISO exacto, aunque no esté entre los que se
-        # muestran. El número escrito sigue mapeando solo a lo visible.
+        # muestran (el menú de días solo ofrece el primer hueco de cada día) o sea de otro
+        # día que el pedido antes (fila vieja de un menú). Se valida contra todos los huecos
+        # libres, no contra `base`. El número escrito sigue mapeando solo a lo visible.
         elegido = texto.strip()
     if elegido is None and hora is not None:
         elegido = _preferir_slot(base, dia_pedido, hora)

@@ -483,3 +483,41 @@ def test_menu_de_dias_ofrece_varios_dias_distintos(datos):
 
     ids = [o["id"] for o in respuestas[0]["opciones"] if o["id"] != "humano"]
     assert len({i[:10] for i in ids}) >= 5
+
+
+# ---------- un id ISO exacto de un hueco libre siempre se acepta ----------
+def _en_paso_slot(sid: str, datos: dict, *previos: str):
+    _enviar(sid, "agendar", datos)
+    _enviar(sid, "manicura", datos)
+    for texto in previos:
+        _enviar(sid, texto, datos)
+
+
+def test_id_iso_de_un_hueco_libre_no_visible_en_el_menu_se_acepta(datos):
+    """Un botón/la API mandan el id exacto aunque el menú de días no lo muestre (solo ofrece
+    el primer hueco de cada día). No debe depender de la hora a la que corre la prueba."""
+    slot = engine.slots_disponibles(datos, "manicura")[-1]
+    _en_paso_slot("i1", datos)
+
+    _, s = _enviar("i1", slot, datos)
+
+    assert s.slot == slot and s.paso == "agendar_nombre"
+
+
+def test_id_iso_de_otro_dia_se_acepta_aunque_antes_pidio_un_dia(datos):
+    """Tocar una fila vieja de un menú anterior (WhatsApp) tras haber pedido 'viernes'."""
+    slot = next(x for x in engine.slots_disponibles(datos, "manicura")
+                if datetime.fromisoformat(x).weekday() != 4)
+    _en_paso_slot("i2", datos, "viernes")
+
+    _, s = _enviar("i2", slot, datos)
+
+    assert s.slot == slot and s.paso == "agendar_nombre"
+
+
+def test_id_iso_de_un_hueco_que_no_esta_libre_no_se_acepta(datos):
+    _en_paso_slot("i3", datos)
+
+    _, s = _enviar("i3", "2020-01-06T10:00", datos)
+
+    assert s.slot is None and s.paso == "agendar_slot"
