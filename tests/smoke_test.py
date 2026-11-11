@@ -96,10 +96,15 @@ def main() -> int:
         opciones = r["respuestas"][0]["opciones"]
         assert opciones, "debe ofrecer horarios libres"
         elegido = slot or _slot_con_margen(opciones)
-        enviar(elegido)
-        r = enviar(nombre)
+        r = enviar(elegido)
         texto = r["respuestas"][0]["texto"]
         m = RE_FOLIO.search(texto)
+        if not m:
+            # El bot solo pide el nombre la primera vez; en la misma sesión ya lo recuerda
+            # y confirma directo al elegir el horario.
+            r = enviar(nombre)
+            texto = r["respuestas"][0]["texto"]
+            m = RE_FOLIO.search(texto)
         assert m, f"la confirmación debe traer folio: {texto}"
         return m.group(0), elegido
 

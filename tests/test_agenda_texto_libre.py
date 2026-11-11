@@ -62,8 +62,14 @@ def test_detecta_dia_hora(frase, dia, hora):
 
 # ---------- conversación completa ----------
 def _cita_natural(datos: dict, servicio_id: str) -> tuple[str, str, str]:
-    """Primer hueco libre + la frase como la escribiría un cliente."""
-    slot = engine.slots_disponibles(datos, servicio_id)[0]
+    """Primer hueco en punto + la frase como la escribiría un cliente.
+
+    Tiene que caer en punto: la frase solo dice la hora ("a las 12 pm"), así que un
+    hueco a las 12:30 no se puede pedir con palabras. Antes tomaba el primer hueco a
+    secas y el test fallaba según la hora a la que corriera.
+    """
+    libres = engine.slots_disponibles(datos, servicio_id)
+    slot = next((s for s in libres if s.endswith(":00")), libres[0])
     d = datetime.fromisoformat(slot)
     sufijo = "am" if d.hour < 12 else "pm"
     h12 = d.hour % 12 or 12
