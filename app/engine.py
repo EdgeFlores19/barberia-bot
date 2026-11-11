@@ -90,10 +90,17 @@ def _t(texto: str, **extra: Any) -> dict[str, Any]:
 
 
 def _b(texto: str, opciones: list[tuple[str, str]], **extra: Any) -> dict[str, Any]:
+    vistas: set[str] = set()
+    filas: list[dict[str, str]] = []
+    for i, l in opciones:
+        if i in vistas:
+            continue          # Meta rechaza la lista entera: (#131009) Duplicated row id
+        vistas.add(i)
+        filas.append({"id": i, "label": l})
     return {
         "tipo": "botones",
         "texto": texto,
-        "opciones": [{"id": i, "label": l} for i, l in opciones],
+        "opciones": filas,
         **extra,
     }
 
@@ -635,8 +642,8 @@ async def _paso_inicio(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     if r["fuente"] == "fallback":
         return [_t(r["texto"]), _b("¿Qué prefieres?", MENU)], s
     s.resuelta = True
-    extra = [("agendar", "Agendar cita")] if r["fuente"] == "llm" else []
-    return [_t(r["texto"]), _b("¿Algo más?", extra + MENU)], s
+    # MENU ya abre con "Agendar cita": anteponerlo dejaba dos filas con el mismo id.
+    return [_t(r["texto"]), _b("¿Algo más?", MENU)], s
 
 
 _CORTESIA = {

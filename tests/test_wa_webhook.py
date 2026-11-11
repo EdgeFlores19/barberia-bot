@@ -298,3 +298,20 @@ def test_health_publica_el_diagnostico_del_canal(bd):
 
     wa = TestClient(app).get("/health").json()["wa"]
     assert wa == whatsapp_webhook.salud()
+
+
+def test_la_alerta_trae_el_codigo_de_meta(bd, monkeypatch):
+    """El aviso fijo "¿venció el token?" mandaba a revisar lo que no era: un 131009
+    es una lista con filas repetidas. La alerta debe decir el código real."""
+    alertas = []
+    monkeypatch.setattr(whatsapp_webhook.avisos, "notificar_alerta", lambda texto: alertas.append(texto))
+    monkeypatch.setattr(whatsapp_webhook, "_ULTIMA_ALERTA", None)
+    monkeypatch.setattr(whatsapp_webhook.wa_cliente, "ultimo_codigo", lambda: 131009)
+
+    async def falla(wa_id, payload):
+        return False
+
+    asyncio.run(whatsapp_webhook.procesar_evento(_payload("hola", "wamid.f3"), falla))
+
+    assert len(alertas) == 1
+    assert "131009" in alertas[0] and "filas repetidas" in alertas[0]

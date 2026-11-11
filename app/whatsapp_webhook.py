@@ -137,16 +137,28 @@ async def procesar_evento(payload: dict[str, Any], enviar: Enviador | None = Non
 
 _ULTIMA_ALERTA: float | None = None
 
+# El aviso culpaba siempre al token: un 131009 (fila repetida) llegaba como "¿venció?".
+_PISTAS_META = {
+    131009: "el mensaje que armó el bot no es válido (filas repetidas u opción de más)",
+    131047: "pasaron más de 24 h desde el último mensaje del cliente",
+    131026: "ese número no puede recibir mensajes del bot",
+    190: "el token de WhatsApp no sirve: revísalo en el panel de Render",
+    401: "el token de WhatsApp no sirve: revísalo en el panel de Render",
+}
+
 
 async def _alerta_envio_fallido() -> None:
-    """Como máximo una alerta por hora."""
+    """Como máximo una alerta por hora, con el código real de Meta."""
     global _ULTIMA_ALERTA
     ahora = time.monotonic()
     if _ULTIMA_ALERTA is not None and ahora - _ULTIMA_ALERTA < 3600:
         return
     _ULTIMA_ALERTA = ahora
+    codigo = wa_cliente.ultimo_codigo()
+    pista = _PISTAS_META.get(codigo, "revisa los logs del servicio en Render")
     await asyncio.to_thread(
-        avisos.notificar_alerta, "No pude enviar un mensaje de WhatsApp. Revisa WA_TOKEN (¿venció?)."
+        avisos.notificar_alerta,
+        f"⚠️ No pude enviar un mensaje de WhatsApp ({codigo or 'sin código'}): {pista}.",
     )
 
 

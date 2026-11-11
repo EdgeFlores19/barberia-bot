@@ -521,3 +521,26 @@ def test_id_iso_de_un_hueco_que_no_esta_libre_no_se_acepta(datos):
     _, s = _enviar("i3", "2020-01-06T10:00", datos)
 
     assert s.slot is None and s.paso == "agendar_slot"
+
+
+# ---------- ningun menu puede repetir ids: Meta responde 400 "Duplicated row id" ----------
+def test_el_menu_no_repite_ids_cuando_contesta_el_llm(datos, monkeypatch):
+    """WhatsApp rechaza la lista entera si dos filas comparten id. La rama del LLM
+    anteponia "agendar" a MENU, que ya lo trae: la clienta no recibia nada."""
+    async def falso_llm(texto: str, datos: dict):
+        return {"fuente": "llm", "texto": "Claro, trabajamos con acrilico y semipermanente."}
+
+    monkeypatch.setattr(engine.llm, "responder", falso_llm)
+
+    respuestas, _ = _enviar("lm1", "trabajan con acrilico?", datos)
+
+    ids = [o["id"] for o in respuestas[-1]["opciones"]]
+    assert ids.count("agendar") == 1, ids
+    assert len(ids) == len(set(ids)), ids
+
+
+def test_los_menus_descartan_ids_repetidos():
+    """Guardia general: cualquier lista con ids repetidos se entrega sin duplicados."""
+    r = engine._b("Elige:", [("a", "A"), ("b", "B"), ("a", "A otra vez")])
+
+    assert [o["id"] for o in r["opciones"]] == ["a", "b"]
