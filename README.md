@@ -20,7 +20,8 @@ atiende a personas con rol en la app), y se usa desde un chat web con la estéti
 ## Qué hace (v1)
 
 - **FAQ**: precios, servicios, horario, ubicación, formas de pago, estacionamiento.
-- **Agendar**: servicio → día/hora → nombre → confirmación. Slots de 30 min, hasta 7 días
+- **Agendar**: servicio → día → horario de ese día → nombre → confirmación (los horarios van
+  paginados de 8 en 8: WhatsApp admite 10 filas por lista). Slots de 30 min, hasta 7 días
   adelante, mínimo 1 hora de anticipación, sin dobles reservas.
 - **Cancelar / reagendar** con el folio de la cita, libre hasta 2 h antes.
 - **Hablar con la manicurista**: handoff y se registra en la conversación.

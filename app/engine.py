@@ -11,7 +11,7 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from . import avisos, calendar_sync, config, llm, reloj, store
@@ -55,6 +55,8 @@ class Sesion:
     handoff_avisado: bool = False           # ya se avisó a la manicurista en este handoff
     sin_avance: int = 0                     # respuestas del LLM que no movieron el paso
     dia_sugerido: int | None = None          # día pedido en el turno anterior
+    dia_fecha: str | None = None             # día ya elegido para esta cita (AAAA-MM-DD)
+    pagina_horas: int = 0                    # página de horarios que se está viendo
 
 
 SESIONES: dict[str, Sesion] = {}
@@ -155,15 +157,81 @@ def bienvenida(datos: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 # ---------- disponibilidad ----------
-def _por_dia(libres: list[str], n: int = 6) -> list[str]:
-    """Primer hueco de cada día, para que el menú no muestre solo el día de hoy."""
-    vistos: list[str] = []
+# ---------- agendar en dos pasos: primero el día, luego el horario de ese día ----------
+HORAS_POR_PAGINA = 8        # + "más horarios"/"otro día" + "humano" = 10 filas, el tope de WhatsApp
+MAX_DIAS_MENU = 9           # + "humano" = 10 filas
+_DIAS_CORTO = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+_OTRA_FECHA = ("humano", "Otra fecha / hablar con la manicurista")
+
+
+def _fechas_con_huecos(libres: list[str]) -> list[str]:
+    """Días (AAAA-MM-DD) que tienen al menos un hueco, en orden y sin repetir."""
+    fechas: list[str] = []
     for i in libres:
-        if i[:10] not in {v[:10] for v in vistos}:
-            vistos.append(i)
-        if len(vistos) == n:
+        if i[:10] not in fechas:
+            fechas.append(i[:10])
+        if len(fechas) == MAX_DIAS_MENU:
             break
-    return vistos
+    return fechas
+
+
+def _etiqueta_dia(fecha: str) -> str:
+    """'Hoy · Mié 11 nov', 'Mañana · Jue 12 nov', 'Vie 13 nov' (cabe en una fila de WhatsApp)."""
+    d = date.fromisoformat(fecha)
+    base = f"{_DIAS_CORTO[d.weekday()]} {d.day} {MESES[d.month - 1]}"
+    hoy = reloj.ahora().date()
+    if d == hoy:
+        return f"Hoy · {base}"
+    if d == hoy + timedelta(days=1):
+        return f"Mañana · {base}"
+    return base
+
+
+def _nombre_dia(fecha: str) -> str:
+    d = date.fromisoformat(fecha)
+    return f"{DIAS[d.weekday()].capitalize()} {d.day} {MESES[d.month - 1]}"
+
+
+def _menu_dias(s: Sesion, datos: dict[str, Any], sid: str, cabecera: str):
+    """Paso 1: ¿qué día? Una opción por día con huecos, sin horarios."""
+    fechas = _fechas_con_huecos(slots_disponibles(datos, sid))
+    s.paso = "agendar_dia"
+    s.dia_fecha = None
+    s.dia_sugerido = None          # va a elegir el día de nuevo: no arrastrar el anterior
+    s.pagina_horas = 0
+    return [_b(cabecera, [(f, _etiqueta_dia(f)) for f in fechas] + [_OTRA_FECHA])], s
+
+
+def _opciones_horas(s: Sesion, del_dia: list[str]) -> list[tuple[str, str]]:
+    """Una página de horarios del día elegido, más cómo seguir (más horarios u otro día)."""
+    p = s.pagina_horas
+    pagina = del_dia[p * HORAS_POR_PAGINA:(p + 1) * HORAS_POR_PAGINA]
+    seguir = (
+        ("mas_horarios", "Más horarios ▸")
+        if (p + 1) * HORAS_POR_PAGINA < len(del_dia)
+        else ("otro_dia", "Elegir otro día")
+    )
+    return [(i, i[11:16]) for i in pagina] + [seguir, _OTRA_FECHA]
+
+
+def _menu_horas(s: Sesion, datos: dict[str, Any], sid: str, fecha: str, cabecera: str):
+    """Paso 2: los horarios del día ya elegido (paginados). Si ese día se llenó, vuelve al paso 1."""
+    del_dia = [i for i in slots_disponibles(datos, sid) if i[:10] == fecha]
+    if not del_dia:
+        return _menu_dias(s, datos, sid, "Ese día ya no tiene horarios. ¿Qué otro día te queda bien?")
+    ultima = (len(del_dia) - 1) // HORAS_POR_PAGINA
+    s.pagina_horas = min(max(s.pagina_horas, 0), ultima)
+    s.dia_fecha = fecha
+    s.paso = "agendar_slot"
+    return [_b(cabecera, _opciones_horas(s, del_dia))], s
+
+
+async def _fijar_slot(s: Sesion, elegido: str, datos: dict[str, Any]):
+    s.slot = elegido
+    if s.nombre:
+        return await _paso_nombre(s, s.nombre, datos)
+    s.paso = "agendar_nombre"
+    return [_t("Apartado. ¿A nombre de quién queda?")], s
 
 
 def _ocupadas() -> list[dict[str, Any]]:
@@ -598,6 +666,8 @@ async def _flujo(
         return await _paso_inicio(s, txt, texto, datos)
     if s.paso == "agendar_servicio":
         return _paso_servicio(s, txt, datos)
+    if s.paso == "agendar_dia":
+        return await _paso_dia(s, txt, texto, datos)
     if s.paso == "agendar_slot":
         return await _paso_slot(s, txt, texto, datos)
     if s.paso == "agendar_nombre":
@@ -705,6 +775,8 @@ def _agendar_directo(
     """Arranca la cita desde una frase libre, saltando preguntas ya contestadas."""
     s.sin_avance = 0
     s.servicio_id = sid
+    s.dia_fecha = None
+    s.pagina_horas = 0
     s.paso = "agendar_slot"
     libres = slots_disponibles(datos, sid)
     if not libres:
@@ -732,25 +804,29 @@ def _agendar_directo(
         if dia is not None and hora is None and any(
             datetime.fromisoformat(i).weekday() == dia for i in libres
         ):
-            cabecera = f"El {DIAS[dia]} tengo:"
-            opciones = libres[:8]
+            primero = next(i for i in libres if datetime.fromisoformat(i).weekday() == dia)
+            return _menu_horas(s, datos, sid, primero[:10], f"El {DIAS[dia]} tengo:")
     else:
         d = s.dia_sugerido
         del_dia = _huecos_dia(datos, sid, d) if d is not None else []
         if del_dia and d is not None:
-            cabecera = (f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min). "
-                        f"El {DIAS[d]} tengo:")
-            opciones = del_dia[:8]
-        else:
-            cabecera = f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min). ¿Qué día te queda bien?"
-            opciones = _por_dia(libres)
+            return _menu_horas(
+                s, datos, sid, del_dia[0][:10],
+                f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min). El {DIAS[d]} tengo:",
+            )
+        return _menu_dias(
+            s, datos, sid,
+            f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min). ¿Qué día te queda bien?",
+        )
     return [_b(cabecera,
                [(i, _etiqueta_slot(i)) for i in opciones]
-               + [("humano", "Otra fecha / hablar con la manicurista")])], s
+               + [_OTRA_FECHA])], s
 
 
 def _ofrecer_servicios(s: Sesion, datos: dict[str, Any]):
     s.paso = "agendar_servicio"
+    s.dia_fecha = None
+    s.pagina_horas = 0
     opts = [(x["id"], f"{x['nombre']} · ${x['precio']}") for x in datos["servicios"]]
     return [_b("¿Qué servicio te haces?", opts)], s
 
@@ -772,6 +848,8 @@ def _paso_servicio(s: Sesion, txt: str, datos: dict[str, Any]):
         return _ofrecer_servicios(s, datos)
 
     s.servicio_id = sid
+    s.dia_fecha = None
+    s.pagina_horas = 0
     s.paso = "agendar_slot"
     libres = slots_disponibles(datos, sid)
     if not libres:
@@ -782,55 +860,150 @@ def _paso_servicio(s: Sesion, txt: str, datos: dict[str, Any]):
     d = s.dia_sugerido
     del_dia = _huecos_dia(datos, sid, d) if d is not None else []
     if del_dia and d is not None:
-        return [_b(f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min). El {DIAS[d]} tengo:",
-                   [(i, _etiqueta_slot(i)) for i in del_dia[:8]]
-                   + [("humano", "Otra fecha / hablar con la manicurista")])], s
-    return [_b(f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min).\n¿Qué día te queda bien?",
-               [(i, _etiqueta_slot(i)) for i in _por_dia(libres)] + [("humano", "Otra fecha / hablar con la manicurista")])], s
+        # Ya había dicho el día antes de elegir el servicio: se salta ese paso.
+        return _menu_horas(
+            s, datos, sid, del_dia[0][:10],
+            f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min). El {DIAS[d]} tengo:",
+        )
+    return _menu_dias(
+        s, datos, sid,
+        f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min).\n¿Qué día te queda bien?",
+    )
+
+
+def _slot_exacto(libres: list[str], texto: str) -> str | None:
+    """El id ISO de un horario libre, o su etiqueta escrita ('Miércoles 11 nov · 17:00')."""
+    t = texto.strip()
+    if t in libres:
+        return t
+    return next((i for i in libres if _norm(t) == _norm(_etiqueta_slot(i))), None)
+
+
+def _nombre_en_texto(texto: str, datos: dict[str, Any]) -> str | None:
+    """¿En vez de contestar dio su nombre? Se guarda y se sigue pidiendo lo que falta."""
+    posible = _limpiar_nombre(texto, datos)
+    if posible and len(posible.split()) <= 3 and all(w.isalpha() for w in posible.split()):
+        return posible
+    return None
+
+
+async def _paso_dia(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
+    """Paso 1 de la cita: elegir el día. Acepta el botón, un número, la etiqueta o el nombre
+    del día; si ya trae día y hora, o solo la hora, lo resuelve el paso del horario."""
+    sid = s.servicio_id or datos["servicios"][0]["id"]
+    libres = slots_disponibles(datos, sid)
+    if not libres:
+        s.paso = "inicio"
+        s.handoff = True
+        return [_t("No me quedan huecos en los próximos 7 días. Te paso con la manicurista para ver si abre un espacio.")], s
+
+    # un horario exacto (la API, o alguien que ya lo conoce) salta los dos pasos
+    elegido = _slot_exacto(libres, texto)
+    if elegido:
+        return await _fijar_slot(s, elegido, datos)
+
+    fechas = _fechas_con_huecos(libres)
+    t = texto.strip()
+    fecha = t if t in fechas else None
+    if fecha is None and txt.isdigit() and 1 <= int(txt) <= len(fechas):
+        fecha = fechas[int(txt) - 1]                    # el número es del día que ve en pantalla
+    if fecha is None:
+        fecha = next((f for f in fechas if _norm(_etiqueta_dia(f)) == txt), None)
+
+    dia, hora = _detectar_dia_hora(texto)
+    if fecha is None and dia is not None and hora is None:
+        fecha = next((f for f in fechas if date.fromisoformat(f).weekday() == dia), None)
+        if fecha is None:
+            return _menu_dias(s, datos, sid, f"El {DIAS[dia]} no tengo horarios. ¿Qué otro día te queda bien?")
+    if fecha is not None:
+        s.pagina_horas = 0
+        return _menu_horas(s, datos, sid, fecha, f"{_nombre_dia(fecha)}. ¿A qué hora te queda bien?")
+
+    if dia is not None or hora is not None:             # "el viernes a las 5" / "a las 5"
+        s.paso = "agendar_slot"
+        return await _paso_slot(s, txt, texto, datos)
+
+    otro = _detectar_servicio(texto, datos)             # cambió de idea sobre el servicio
+    if otro and otro != sid:
+        return _agendar_directo(s, otro, None, None, datos)
+
+    posible = _nombre_en_texto(texto, datos)
+    if posible:
+        s.nombre = posible
+        return _menu_dias(s, datos, sid, f"Va, {posible}. Nada más elige el día:")
+    return _menu_dias(s, datos, sid, "¿Qué día te queda bien?")
 
 
 async def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
+    """Paso 2 de la cita: elegir el horario del día ya escogido (o de lo que pidió por texto)."""
     sid = s.servicio_id or datos["servicios"][0]["id"]
     libres = slots_disponibles(datos, sid)
+    t = texto.strip()
+    if s.dia_fecha and not any(i[:10] == s.dia_fecha for i in libres):
+        s.dia_fecha = None                              # ese día se llenó mientras tanto
+    if s.dia_fecha and t == "mas_horarios":
+        s.pagina_horas += 1
+        return _menu_horas(s, datos, sid, s.dia_fecha, f"{_nombre_dia(s.dia_fecha)}. Más horarios:")
+    if t == "otro_dia" and libres:
+        return _menu_dias(s, datos, sid, "¿Qué día te queda bien?")
+
     dia, hora = _detectar_dia_hora(texto)
     if dia is not None:
         s.dia_sugerido = dia
-    dia_pedido = dia if dia is not None else s.dia_sugerido
-    del_dia = _huecos_dia(datos, sid, dia_pedido) if dia_pedido is not None else []
-    base = del_dia or libres
+        if hora is None:
+            # "mejor el sábado": cambia de día y enseña los horarios de ese día
+            primero = next((i for i in libres if datetime.fromisoformat(i).weekday() == dia), None)
+            if primero:
+                s.pagina_horas = 0
+                return _menu_horas(s, datos, sid, primero[:10], f"El {DIAS[dia]} tengo:")
+        s.dia_fecha = None
+
     # lo que el cliente ve es lo que puede escribir como número
-    if del_dia and hora is None:
-        visibles = base[:8]
-    elif dia is not None or hora is not None or (del_dia and dia_pedido is not None):
-        visibles = _cercanos(base, dia_pedido, hora)
+    por_fecha = bool(s.dia_fecha) and dia is None
+    if por_fecha:
+        del_dia = [i for i in libres if i[:10] == s.dia_fecha]
+        base, dia_pedido = del_dia, None
+        p = s.pagina_horas
+        visibles = (
+            del_dia[p * HORAS_POR_PAGINA:(p + 1) * HORAS_POR_PAGINA]
+            if hora is None else _cercanos(base, None, hora)
+        )
     else:
-        visibles = _por_dia(base)
+        dia_pedido = dia if dia is not None else s.dia_sugerido
+        del_dia = _huecos_dia(datos, sid, dia_pedido) if dia_pedido is not None else []
+        base = del_dia or libres
+        if del_dia and hora is None:
+            visibles = base[:8]
+        elif dia is not None or hora is not None or (del_dia and dia_pedido is not None):
+            visibles = _cercanos(base, dia_pedido, hora)
+        else:
+            visibles = []                               # sin día de referencia: se pregunta el día
+
+    def opciones() -> list[tuple[str, str]]:
+        if por_fecha and hora is None:
+            return _opciones_horas(s, del_dia)
+        return [(i, _etiqueta_slot(i)) for i in visibles] + [_OTRA_FECHA]
 
     elegido = _elegir_slot(visibles, txt, texto)
-    if elegido is None and texto.strip() in libres:
-        # Un botón o la API mandan el id ISO exacto, aunque no esté entre los que se
-        # muestran (el menú de días solo ofrece el primer hueco de cada día) o sea de otro
-        # día que el pedido antes (fila vieja de un menú). Se valida contra todos los huecos
-        # libres, no contra `base`. El número escrito sigue mapeando solo a lo visible.
-        elegido = texto.strip()
+    if elegido is None:
+        # Un botón o la API mandan el id exacto (o la etiqueta escrita) de cualquier hueco
+        # libre, aunque no esté en pantalla o sea de otro día (fila vieja de un menú). El
+        # número escrito sigue mapeando solo a lo visible.
+        elegido = _slot_exacto(libres, texto)
     if elegido is None and hora is not None:
         elegido = _preferir_slot(base, dia_pedido, hora)
     if elegido is not None:
-        s.slot = elegido
-        if s.nombre:
-            return await _paso_nombre(s, s.nombre, datos)
-        s.paso = "agendar_nombre"
-        return [_t("Apartado. ¿A nombre de quién queda?")], s
+        return await _fijar_slot(s, elegido, datos)
 
     if not libres:
         return _paso_servicio(s, sid, datos)
     # preguntó precio en vez de un horario: contesta y deja el menú
     if any(k in txt for k in ("cuanto", "cuesta", "precio", "vale", "cobran")):
         sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0, "minutos": 30}
-        return [_b(f"{sv['nombre']} cuesta ${sv['precio']} ({sv['minutos']} min). "
-                   "¿Qué horario te aparto?",
-                   [(i, _etiqueta_slot(i)) for i in visibles]
-                   + [("humano", "Otra fecha / hablar con la manicurista")])], s
+        precio = f"{sv['nombre']} cuesta ${sv['precio']} ({sv['minutos']} min). "
+        if not por_fecha and not visibles:
+            return _menu_dias(s, datos, sid, precio + "¿Qué día te queda bien?")
+        return [_b(precio + "¿Qué horario te aparto?", opciones())], s
     # nombró otro servicio en vez de un horario: cambia y vuelve a ofrecer
     otro = _detectar_servicio(texto, datos)
     if otro and otro != sid:
@@ -848,16 +1021,18 @@ async def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
         aviso = f"El {DIAS[dia_pedido]} tengo:"
     else:
         aviso = "Elige el horario que te acomode:"
-    # ¿en vez de un horario dio su nombre? Guárdalo y pide solo el horario
-    posible = _limpiar_nombre(texto, datos)
-    if posible and len(posible.split()) <= 3 and all(
-        w.isalpha() for w in posible.split()
-    ):
+    # ¿en vez de un horario dio su nombre? Guárdalo y pide solo lo que falta
+    posible = _nombre_en_texto(texto, datos)
+    if posible:
         s.nombre = posible
+    if not por_fecha and not visibles:
+        return _menu_dias(
+            s, datos, sid,
+            f"Va, {posible}. Nada más elige el día:" if posible else "¿Qué día te queda bien?",
+        )
+    if posible:
         aviso = f"Va, {posible}. Nada más elige el horario:"
-    return [_b(aviso,
-               [(i, _etiqueta_slot(i)) for i in visibles]
-               + [("humano", "Otra fecha / hablar con la manicurista")])], s
+    return [_b(aviso, opciones())], s
 
 
 async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
@@ -870,10 +1045,8 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     await _sincronizar_calendar(datos, forzar=True)   # justo antes de apartar: lo manual de último momento
     ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(), reloj.ahora())
     if not ok:
-        s.paso = "agendar_slot"
-        libres = slots_disponibles(datos, sid)
-        return [_b(f"Ese horario se acaba de ocupar ({motivo}). Elige otro:",
-                   [(i, _etiqueta_slot(i)) for i in libres[:8]])], s
+        s.pagina_horas = 0
+        return _menu_horas(s, datos, sid, slot[:10], f"Ese horario se acaba de ocupar ({motivo}). Elige otro:")
 
     try:
         # En WhatsApp la cita queda ligada al teléfono: sin esto, el candado de folio
@@ -881,10 +1054,8 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
         tel = s.telefono if s.canal == "wa" else ""
         cita = store.crear(slot, sid, nombre, tel)
     except store.SlotOcupado:
-        s.paso = "agendar_slot"
-        libres = slots_disponibles(datos, sid)
-        return [_b("Justo alguien más tomó ese horario. Elige otro:",
-                   [(i, _etiqueta_slot(i)) for i in libres[:8]])], s
+        s.pagina_horas = 0
+        return _menu_horas(s, datos, sid, slot[:10], "Justo alguien más tomó ese horario. Elige otro:")
 
     event_id = await asyncio.to_thread(calendar_sync.crear, cita, datos)
     if event_id:
@@ -894,6 +1065,8 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     s.folio = cita["folio"]
     s.paso = "fin"
     s.dia_sugerido = None          # el día pedido era para esta cita; no arrastrarlo
+    s.dia_fecha = None
+    s.pagina_horas = 0
     s.resuelta = True
     sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0}
     horas = datos["reglas_agenda"]["cancelacion_libre_hasta_horas"]

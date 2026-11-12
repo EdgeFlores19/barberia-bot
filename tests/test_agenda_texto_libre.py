@@ -91,12 +91,13 @@ def test_frase_libre_agenda_sin_repetir_preguntas(datos):
     assert s.folio and s.folio.startswith("AMB-")
 
 
-def test_servicio_solo_muestra_horarios_sin_repetir_el_servicio(datos):
+def test_servicio_solo_pregunta_el_dia_sin_repetir_el_servicio(datos):
     resp, s = _enviar("libre2", "Manicura y pedicura, por favor", datos)
-    assert s.paso == "agendar_slot"
+    assert s.paso == "agendar_dia"
     assert s.servicio_id == "manicura_pedicura"
     opciones = resp[-1].get("opciones") or []
-    assert opciones, "debe ofrecer horarios concretos"
+    assert opciones, "debe ofrecer días concretos"
+    assert "servicio" not in resp[-1]["texto"].lower()
 
 
 def test_horario_pedido_se_elige_en_el_siguiente_mensaje(datos):

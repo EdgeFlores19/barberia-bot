@@ -520,7 +520,7 @@ def test_id_iso_de_un_hueco_que_no_esta_libre_no_se_acepta(datos):
 
     _, s = _enviar("i3", "2020-01-06T10:00", datos)
 
-    assert s.slot is None and s.paso == "agendar_slot"
+    assert s.slot is None and s.paso == "agendar_dia"
 
 
 # ---------- ningun menu puede repetir ids: Meta responde 400 "Duplicated row id" ----------
