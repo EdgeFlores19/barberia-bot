@@ -1,6 +1,6 @@
 # ADR 0009 — El concentrado de depósitos: el corte del día para cuadrar a mano
 
-- **Estado:** aceptado y **desplegado** (commit `911d7dc`, deploy live el 2026-11-15)
+- **Estado:** aceptado y desplegado el 2026-11-15 (main `3d88cc5`, `/health` `ok: true`)
 - **Fecha:** 2026-11-15
 - **Alcance:** cómo se entera la dueña de qué depósitos entraron, sin inventar un sistema de
   confirmación que no se quiere.
