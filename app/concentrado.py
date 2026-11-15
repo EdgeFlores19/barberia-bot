@@ -143,10 +143,19 @@ def _linea(f: dict[str, Any]) -> str:
     if f["anulada"]:
         cabeza += " (cancelada: revisa la devolución)"
     deposito = _fecha_corta(date.fromisoformat(f["depositado"][:10]))
+    tel = _con_mas(f["telefono"])
     return (f"{cabeza}\n"
             f"  {f['nombre']} · Folio {f['folio']}\n"
             f"  Anticipo ${f['anticipo']:,} · resta ${f['resta']:,}\n"
-            f"  Tel +{f['telefono']} · depositado {deposito}")
+            f"  Tel {tel} · depositado {deposito}")
+
+
+def _con_mas(telefono: str) -> str:
+    """El número como se marca, venga `521449…` (WhatsApp) o `+52…`. Sin él, se dice."""
+    limpio = (telefono or "").strip()
+    if not limpio:
+        return "(sin teléfono: pídelo por el chat web)"
+    return limpio if limpio.startswith("+") else f"+{limpio}"
 
 
 def texto(r: dict[str, Any]) -> str:

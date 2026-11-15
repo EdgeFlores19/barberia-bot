@@ -28,7 +28,7 @@ def _cita(**kw):
         "slot": "2026-11-16T10:00",
         "servicio_id": "manicura",
         "nombre": "Ana",
-        "telefono": "+525512345678",
+        "telefono": "5215551234567",
         "estado": "confirmada",
         "anticipo_monto": 200,
         "comprobante_en": "2026-11-15T18:42:05",
@@ -138,7 +138,7 @@ def test_texto_vacio_lo_dice():
 def test_texto_trae_lo_que_la_duena_necesita_para_cuadrar():
     t = _reporte([_cita()])["texto"]
 
-    for dato in ("AMB-AAAA", "Ana", "Manicura", "200", "345678", "16 nov"):
+    for dato in ("AMB-AAAA", "Ana", "Manicura", "200", "Tel +5215551234567", "16 nov"):
         assert dato in t
 
 
@@ -200,3 +200,23 @@ def test_reset_limpia_los_resumenes(bd):
     store.reset()
 
     assert store.resumen_hecho("2026-11-15") is False
+
+
+# ---------- el teléfono se lee como se marca ----------
+def test_telefono_de_whatsapp_se_muestra_con_un_solo_mas():
+    """WhatsApp guarda `521…` sin `+`; ponerle otro daba `Tel ++52…`."""
+    t = concentrado.texto(_reporte([_cita(telefono="5215551234567")]))
+
+    assert "Tel +5215551234567" in t and "++" not in t
+
+
+def test_telefono_que_ya_trae_mas_no_se_duplica():
+    t = concentrado.texto(_reporte([_cita(telefono="+5215551234567")]))
+
+    assert "Tel +5215551234567" in t and "++" not in t
+
+
+def test_sin_telefono_lo_dice_en_vez_de_dejar_el_hueco():
+    t = concentrado.texto(_reporte([_cita(telefono="")]))
+
+    assert "sin teléfono" in t
