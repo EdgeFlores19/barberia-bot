@@ -1,6 +1,6 @@
 # ADR 0009 — El concentrado de depósitos: el corte del día para cuadrar a mano
 
-- **Estado:** aceptado, pendiente de desplegar
+- **Estado:** aceptado y **desplegado** (commit `911d7dc`, deploy live el 2026-11-15)
 - **Fecha:** 2026-11-15
 - **Alcance:** cómo se entera la dueña de qué depósitos entraron, sin inventar un sistema de
   confirmación que no se quiere.
@@ -16,8 +16,9 @@ Lo que ya hay y no se toca:
 
 - **Aviso instantáneo** por Telegram (`app/avisos.py`), uno por comprobante. Sirve para reaccionar,
   no para cuadrar: a las 20:00 hay que releer cuarenta mensajes.
-- **`/api/citas`** devuelve las citas **sin** `telefono` ni montos. Es deliberado: es la ruta que
-  consume la demo pública. El concentrado necesita justo esos dos campos.
+- **`/api/citas`** ya exige `X-Admin-Token`, pero devuelve las citas **sin** `telefono` ni montos
+  (`_SIN_DATOS_PERSONALES`): sirve para ver la agenda, no para cuadrar. El concentrado necesita
+  justo esos dos campos, así que no se reutiliza ni se le quita el filtro.
 
 Lo que está muerto: `anticipo.resumen_hora` (`"20:00"`) existe en `data/barberia.json` desde el
 principio y **no programa nada**. No hay cron ni tarea de fondo. Y `resumen_diario: true` no es la
