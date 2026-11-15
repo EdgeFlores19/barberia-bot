@@ -46,7 +46,7 @@ def anticipo_activo(monkeypatch) -> dict:
     monkeypatch.setattr(config, "ANTICIPO_TITULAR", "Nombre Apellido")
     monkeypatch.setattr(config, "WA_MAX_POR_HORA", 1000)
     monkeypatch.setattr(config, "WA_MAX_POR_DIA", 1000)
-    monkeypatch.setattr(config, "WA_MAX_GLOBAL_DIA", 1000)
+    monkeypatch.setattr(config, "WA_MAX_GLOBAL_POR_DIA", 1000)
     avisos: list = []
     monkeypatch.setattr(engine.avisos, "notificar_anticipo", lambda **k: avisos.append(("anticipo", k)))
     monkeypatch.setattr(engine.avisos, "notificar_handoff", lambda sid, tel, msg: avisos.append(("handoff", msg)))
