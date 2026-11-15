@@ -61,6 +61,13 @@ Tres piezas, cada una con un solo trabajo:
 
 - La dueña recibe un mensaje a las 20:00 con el corte del día; si el proceso estaba caído, sale al
   volver. Un día sin depósitos manda «Sin depósitos registrados», que también es información.
+- **A quién le llega hoy es al dueño del despliegue, no a la dueña.** El destino es
+  `TELEGRAM_CHAT_ID` en el panel de Render; mientras el anticipo corra con datos ficticios, ahí va
+  el chat de Edgar para pruebas. Cuando el bot pase a manos del negocio, el traspaso es cambiar esa
+  variable al Telegram de la dueña — sin tocar código.
+- **El aviso instantáneo y el concentrado comparten `TELEGRAM_CHAT_ID`**: cambiar el destino mueve
+  los dos a la vez. Si el negocio pide que el anticipo llegue a una persona y el corte a otra, eso
+  sí es trabajo: una variable aparte (`TELEGRAM_CHAT_ID_RESUMEN`) y una rama en `_telegram`.
 - Telegram corta en 4096 caracteres: el texto se recorta a 3800 y avisa dónde seguir
   (`/api/depositos`). Un día de 40 depósitos cabe igual.
 - `ADMIN_TOKEN` ya existe en producción (43 caracteres): no hay secreto nuevo que cargar.
