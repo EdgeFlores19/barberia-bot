@@ -37,6 +37,16 @@ RATE_MENSAJE_POR_MIN = int(os.getenv("RATE_MENSAJE_POR_MIN", "60"))    # por IP
 # N > 0 = la N-ésima desde la derecha (la que agrega un proxy de confianza).
 IP_DESDE_DERECHA = int(os.getenv("IP_DESDE_DERECHA", "0"))
 
+# Anticipo al agendar (ver app/anticipo.py). El monto y las políticas viven en el bloque
+# "anticipo" del JSON del negocio; aquí solo van el interruptor y los datos de pago, que son
+# del cliente y NO se commitean (variables secretas en Render).
+#   ANTICIPO_ACTIVO: vacío = lo que diga el JSON; "1"/"0" = fuerza encendido/apagado.
+_AA = os.getenv("ANTICIPO_ACTIVO", "").strip().lower()
+ANTICIPO_ACTIVO: bool | None = None if not _AA else _AA in {"1", "true", "yes", "si", "sí"}
+ANTICIPO_BANCO = os.getenv("ANTICIPO_BANCO", "").strip()
+ANTICIPO_CLABE = os.getenv("ANTICIPO_CLABE", "").replace(" ", "").strip()
+ANTICIPO_TITULAR = os.getenv("ANTICIPO_TITULAR", "").strip()
+
 # Presupuesto duro (capa 2 del esquema de acceso)
 MAX_MENSAJES_POR_SESION = int(os.getenv("MAX_MENSAJES_POR_SESION", "40"))
 MAX_MENSAJES_POR_DIA = int(os.getenv("MAX_MENSAJES_POR_DIA", "300"))

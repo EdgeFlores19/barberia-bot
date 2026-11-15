@@ -103,17 +103,23 @@ def test_un_evento_manual_bloquea_sus_horarios(datos, calendario):
 
 
 def test_el_borde_del_evento_no_bloquea_el_hueco_contiguo(datos, calendario):
-    slot = _ultimo_hueco(datos)
+    # Se toma un hueco que tenga otro libre justo 60 min después: así la afirmación no depende
+    # de a qué hora cierra ese día (el sábado cierra 18:00 y el domingo no abre).
+    libres = engine.slots_disponibles(datos, "manicura")
+    slot, despues = next(
+        (s, d) for s in reversed(libres)
+        if (d := (datetime.fromisoformat(s) + timedelta(minutes=60)).isoformat(timespec="minutes")) in libres
+    )
     calendario.eventos = [_evento(slot, 60)]
 
     _refrescar()
     libres = engine.slots_disponibles(datos, "manicura")
 
-    despues = (datetime.fromisoformat(slot) + timedelta(minutes=60)).isoformat(timespec="minutes")
     antes = (datetime.fromisoformat(slot) - timedelta(minutes=30)).isoformat(timespec="minutes")
-    # El cierre puede caer fuera de horario: solo se afirma lo que sí debería estar libre.
-    assert antes in libres or datetime.fromisoformat(antes).hour < 10
-    assert despues in libres or datetime.fromisoformat(despues).hour >= 20
+    abre = int(str(datos["horario"]["lunes_viernes"]["abre"])[:2])
+    assert slot not in libres
+    assert despues in libres
+    assert antes in libres or datetime.fromisoformat(antes).hour < abre
 
 
 def test_un_evento_de_todo_el_dia_bloquea_el_dia(datos, calendario):

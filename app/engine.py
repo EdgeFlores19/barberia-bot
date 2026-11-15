@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from . import avisos, calendar_sync, config, llm, reloj, store
+from . import anticipo, avisos, calendar_sync, config, llm, reloj, store
 from . import slots as horarios
 from .telefono import t10 as _t10
 
@@ -57,6 +57,7 @@ class Sesion:
     dia_sugerido: int | None = None          # día pedido en el turno anterior
     dia_fecha: str | None = None             # día ya elegido para esta cita (AAAA-MM-DD)
     pagina_horas: int = 0                    # página de horarios que se está viendo
+    aviso_extra: str = ""                    # detalle para el aviso de handoff (lo consume _avisar_handoff)
 
 
 SESIONES: dict[str, Sesion] = {}
@@ -535,6 +536,7 @@ async def manejar(
     datos: dict[str, Any],
     canal: str = "web",
     telefono: str = "",
+    media: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], Sesion]:
     s = SESIONES.get(sid) or Sesion(sid)
     SESIONES[sid] = s
@@ -592,7 +594,13 @@ async def manejar(
     # sigue activo es el mismo episodio y no se avisa otra vez; si no, es una petición nueva.
     ya_en_humano = s.handoff and s.paso == "humano"
     await _sincronizar_calendar(datos)
-    respuestas, s = await _flujo(s, texto, txt, datos)
+    if media is not None:
+        # Foto, captura o PDF: el comprobante del anticipo. No depende del paso de la sesión
+        # (que puede haberse reiniciado): se busca el apartado de esa clienta por su teléfono.
+        respuestas, s = await _recibir_media(s, media, datos)
+        texto = f"[{media.get('tipo', 'archivo')} enviado]"
+    else:
+        respuestas, s = await _flujo(s, texto, txt, datos)
     await _avisar_handoff(s, texto, ya_en_humano)
     return respuestas, s
 
@@ -616,9 +624,10 @@ async def _avisar_handoff(s: Sesion, texto: str, ya_en_humano: bool = False) -> 
     if ya_en_humano and s.handoff_avisado:
         return                         # mismo episodio: ya se avisó
     s.handoff_avisado = True
-    store.registrar_handoff(s.sid, texto)
+    detalle, s.aviso_extra = s.aviso_extra or texto, ""
+    store.registrar_handoff(s.sid, detalle)
     # La red va en otro hilo: Telegram no debe bloquear el event loop.
-    await asyncio.to_thread(avisos.notificar_handoff, s.sid, s.telefono, texto)
+    await asyncio.to_thread(avisos.notificar_handoff, s.sid, s.telefono, detalle)
 
 
 async def _flujo(
@@ -627,6 +636,7 @@ async def _flujo(
     """Salidas globales y pasos de la conversación, ya pasados los topes."""
     # salidas globales
     if txt in {"menu", "inicio", "hola", "buenas", "buenos dias", "buenas tardes", "hey", "que tal"}:
+        _liberar_apartado(s)
         s.paso = "inicio"
         s.handoff = False
         return bienvenida(datos), s
@@ -662,6 +672,12 @@ async def _flujo(
         s.paso = "inicio"
         return await _paso_inicio(s, txt, texto, datos)
 
+    if s.paso == "anticipo_aceptar":
+        return await _paso_anticipo_aceptar(s, txt, datos)
+    if s.paso == "comprobante":
+        return await _paso_comprobante(s, txt, datos)
+    if s.paso == "cancelar_confirmar":
+        return await _paso_cancelar_confirmar(s, txt, datos)
     if s.paso == "inicio":
         return await _paso_inicio(s, txt, texto, datos)
     if s.paso == "agendar_servicio":
@@ -1048,6 +1064,9 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
         s.pagina_horas = 0
         return _menu_horas(s, datos, sid, slot[:10], f"Ese horario se acaba de ocupar ({motivo}). Elige otro:")
 
+    if anticipo.activo(datos):
+        return _pedir_aceptacion(s, nombre, datos)
+
     try:
         # En WhatsApp la cita queda ligada al teléfono: sin esto, el candado de folio
         # (`_folio_autorizado`) no deja al propio cliente cancelar ni mover su cita.
@@ -1074,6 +1093,169 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
                f"(${sv['precio']}). Llega 5 min antes.\n\n"
                f"Tu folio es {cita['folio']}. Puedes cancelar o mover sin costo hasta {horas} h antes.\n"
                f"Te esperamos en {datos['direccion']}."),
+            _b("¿Algo más?", MENU)], s
+
+
+# ---------- anticipo ----------
+ACEPTA_ANTICIPO = {"acepto_anticipo", "acepto", "si", "ok", "de acuerdo", "va", "dale", "claro",
+                   "estoy de acuerdo", "acepto el anticipo", "sii"}
+RECHAZA_ANTICIPO = {"rechazo_anticipo", "no", "mejor no", "no gracias", "no acepto", "nel", "nop"}
+SI_CANCELAR = {"cancelar_si", "si", "sii", "confirmo", "confirmar", "si cancelar", "si, cancelar"}
+NO_CANCELAR = {"cancelar_no", "no", "nop", "conservar", "menu", "conservar mi cita", "nel"}
+
+
+def _pedir_aceptacion(s: Sesion, nombre: str, datos: dict[str, Any]):
+    """Antes de dar la cuenta: la clienta ve las condiciones y las acepta (queda registrado)."""
+    s.nombre = nombre
+    if s.canal != "wa":
+        s.paso = "inicio"
+        return [_t("Para apartar tu cita se pide un anticipo con comprobante, y eso se hace por WhatsApp. "
+                   f"Escríbenos al {datos['telefono']} y la agendamos ahí."),
+                _b("¿Algo más?", MENU)], s
+    sv = _servicio(datos, s.servicio_id or "") or {"nombre": s.servicio_id, "precio": 0}
+    s.paso = "anticipo_aceptar"
+    return [_t(f"Perfecto, {nombre}. Tu cita sería {_etiqueta_slot(s.slot or '')} para {sv['nombre']} (${sv['precio']})."),
+            _b(anticipo.texto_aviso(anticipo.cfg(datos), sv["precio"]),
+               [("acepto_anticipo", "Acepto"), ("rechazo_anticipo", "Mejor no")])], s
+
+
+def _liberar_apartado(s: Sesion) -> None:
+    """Si la clienta se va del pago, el horario apartado vuelve a estar libre."""
+    if s.paso != "comprobante" or not s.folio:
+        return
+    cita = store.obtener(s.folio)
+    if cita and cita["estado"] == "pendiente":
+        store.cancelar(cita["folio"])
+    s.folio = None
+
+
+async def _paso_anticipo_aceptar(s: Sesion, txt: str, datos: dict[str, Any]):
+    sv = _servicio(datos, s.servicio_id or "") or {"nombre": s.servicio_id, "precio": 0}
+    c = anticipo.cfg(datos)
+    if txt in RECHAZA_ANTICIPO:
+        s.paso = "inicio"
+        return [_t("Sin problema. Cuando quieras apartar tu cita, aquí estoy."), _b("¿Algo más?", MENU)], s
+    if txt not in ACEPTA_ANTICIPO:
+        return [_b(anticipo.texto_aviso(c, sv["precio"]),
+                   [("acepto_anticipo", "Acepto"), ("rechazo_anticipo", "Mejor no")])], s
+
+    problemas = anticipo.problemas_de_pago()
+    if problemas:
+        log.error("anticipo: datos de pago incompletos (%s)", "; ".join(problemas))
+        s.handoff, s.paso = True, "humano"
+        s.aviso_extra = "Una clienta quiso apartar con anticipo pero los datos de pago no están configurados."
+        return [_t("Te paso con la manicurista para darte los datos del anticipo y apartar tu horario.")], s
+
+    sid, slot, nombre = s.servicio_id or "", s.slot or "", s.nombre
+    # Una clienta, un apartado: el anterior se libera (si no, ella misma se taparía el horario).
+    previo = store.apartado_reciente(s.telefono, gracia_horas=0)
+    if previo and previo["estado"] == "pendiente":
+        store.cancelar(previo["folio"])
+    await _sincronizar_calendar(datos, forzar=True)
+    ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(), reloj.ahora())
+    if not ok:
+        s.pagina_horas = 0
+        return _menu_horas(s, datos, sid, slot[:10], f"Ese horario se acaba de ocupar ({motivo}). Elige otro:")
+
+    ahora = reloj.ahora()
+    ahora_iso = ahora.isoformat(timespec="seconds")
+    minutos = anticipo.apartado_minutos(c, slot, ahora)
+    vence = (ahora + timedelta(minutes=minutos)).isoformat(timespec="seconds")
+    try:
+        cita = store.crear(slot, sid, nombre, s.telefono, pendiente_hasta=vence,
+                           anticipo=anticipo.monto_para(c, sv["precio"]), aceptado_en=ahora_iso, ahora=ahora_iso)
+    except store.SlotOcupado:
+        s.pagina_horas = 0
+        return _menu_horas(s, datos, sid, slot[:10], "Justo alguien más tomó ese horario. Elige otro:")
+
+    s.folio = cita["folio"]
+    s.paso = "comprobante"
+    s.dia_sugerido = None
+    s.dia_fecha = None
+    s.pagina_horas = 0
+    return [_t(anticipo.texto_pago(c, cita["folio"], minutos, config.ANTICIPO_BANCO,
+                                   config.ANTICIPO_CLABE, config.ANTICIPO_TITULAR, sv["precio"]))], s
+
+
+async def _paso_comprobante(s: Sesion, txt: str, datos: dict[str, Any]):
+    """Ya dio la cuenta: aquí solo se espera el archivo (llega por `manejar(media=...)`)."""
+    cita = store.obtener(s.folio or "")
+    if cita is None or cita["estado"] != "pendiente":
+        s.paso, s.folio = "inicio", None
+        return [_t("Ese apartado ya no está activo."), _b("¿Qué hacemos?", MENU)], s
+    ahora_iso = reloj.ahora().isoformat(timespec="seconds")
+    if cita["vence"] <= ahora_iso:
+        store.expirar_vencidas(ahora_iso)
+        s.paso, s.folio = "inicio", None
+        return [_t("Se acabó el tiempo del apartado y liberé el horario. Si ya hiciste la transferencia, "
+                   "mándame aquí tu comprobante y la manicurista te ayuda; o elige otro horario."),
+                _b("¿Qué hacemos?", MENU)], s
+    if _es_cancelar(txt) or txt in {"ya no", "no quiero", "olvidalo"}:
+        store.cancelar(cita["folio"])
+        s.paso, s.folio = "inicio", None
+        return [_t("Listo, liberé el horario. Cuando quieras apartar otro, aquí estoy."), _b("¿Algo más?", MENU)], s
+    if txt in {"agendar", "1", "cita", "agenda", "reservar", "quiero cita"}:
+        # Quiere otro horario: se libera el apartado sin pagar y se empieza de nuevo.
+        store.cancelar(cita["folio"])
+        s.paso, s.folio = "inicio", None
+        return _ofrecer_servicios(s, datos)
+    hasta = datetime.fromisoformat(cita["vence"]).strftime("%H:%M")
+    return [_t("Estoy esperando tu comprobante (foto, captura o PDF) para agendar tu cita. "
+               f"Tienes hasta las {hasta}. Si ya no quieres apartarla, escribe *cancelar*.")], s
+
+
+def _comprobante_sin_horario(s: Sesion, cita: dict[str, Any], datos: dict[str, Any]):
+    """Llegó el pago pero el horario ya no es de ella: lo resuelve la manicurista, no el bot."""
+    s.handoff, s.paso, s.handoff_avisado = True, "humano", False
+    s.aviso_extra = (f"Llegó un comprobante de anticipo (folio {cita['folio']}, {cita['nombre']}, "
+                     f"{_etiqueta_slot(cita['slot'])}) pero el apartado venció y el horario ya no está "
+                     "disponible. Revisa el pago y contacta a la clienta.")
+    return [_t("Recibí tu comprobante, pero el tiempo del apartado venció y ese horario ya no está disponible. "
+               "Ya le avisé a la manicurista para que revise tu pago y te contacte.")], s
+
+
+async def _recibir_media(s: Sesion, media: dict[str, str], datos: dict[str, Any]):
+    if s.canal != "wa" or not anticipo.activo(datos):
+        return [_t("Por ahora solo entiendo mensajes de texto. Escribe *menú* para ver las opciones.")], s
+    tipo, mime = media.get("tipo", ""), (media.get("mime") or "").lower()
+    if tipo not in {"image", "document"} or (tipo == "document" and not (
+            mime == "application/pdf" or mime.startswith("image/"))):
+        return [_t("Para el anticipo necesito una foto, captura o PDF del comprobante. ¿Me lo mandas así?")], s
+
+    ahora = reloj.ahora()
+    ahora_iso = ahora.isoformat(timespec="seconds")
+    cita = store.apartado_reciente(s.telefono, ahora=ahora_iso)
+    if cita is None:
+        s.handoff, s.paso, s.handoff_avisado = True, "humano", False
+        s.aviso_extra = "Envió un archivo (posible comprobante) pero no tiene un apartado de anticipo pendiente."
+        return [_t("Recibí tu archivo, pero no tengo una cita pendiente de anticipo a tu nombre. "
+                   "Ya le pasé tu conversación a la manicurista para que lo revise.")], s
+
+    tardio = not (cita["estado"] == "pendiente" and cita["vence"] > ahora_iso)
+    if tardio:
+        ok, _motivo = horarios.validar(datos, cita["servicio_id"], cita["slot"], _ocupadas(), ahora)
+        if not ok:
+            return _comprobante_sin_horario(s, cita, datos)
+    try:
+        cita = store.registrar_comprobante(cita["folio"], tipo, media.get("id", ""), ahora_iso)
+    except (store.SlotOcupado, store.EstadoInvalido):
+        return _comprobante_sin_horario(s, cita, datos)
+
+    event_id = await asyncio.to_thread(calendar_sync.crear, cita, datos)
+    if event_id:
+        store.set_evento(cita["folio"], event_id)
+
+    c = anticipo.cfg(datos)
+    sv = _servicio(datos, cita["servicio_id"]) or {"nombre": cita["servicio_id"], "precio": 0}
+    etiqueta = _etiqueta_slot(cita["slot"])
+    urgente = anticipo.es_urgente(c, cita["slot"], ahora)
+    if urgente or tardio or not c["resumen_diario"]:
+        await asyncio.to_thread(
+            avisos.notificar_anticipo, cita=cita, servicio=sv["nombre"], etiqueta=etiqueta,
+            restante=anticipo.restante(sv["precio"], c), telefono=s.telefono, urgente=urgente, tardio=tardio)
+
+    s.folio, s.nombre, s.paso, s.resuelta = cita["folio"], cita["nombre"], "fin", True
+    return [_t(anticipo.texto_comprobante_ok(c, sv["nombre"], etiqueta, cita["folio"], sv["precio"])),
             _b("¿Algo más?", MENU)], s
 
 
@@ -1109,12 +1291,20 @@ def _paso_citas_folio(s: Sesion, texto: str, datos: dict[str, Any]):
         s.paso = "inicio"
         return [_t(f"La cita {cita['folio']} ya está cancelada. Si quieres, agendamos otra."),
                 _b("¿Qué hacemos?", MENU)], s
+    if cita["estado"] == "expirada":
+        s.paso = "inicio"
+        return [_t(f"El apartado {cita['folio']} venció y el horario se liberó. Si ya hiciste la transferencia, "
+                   "mándame tu comprobante y la manicurista te ayuda."), _b("¿Qué hacemos?", MENU)], s
+    if cita["estado"] == "pendiente":
+        s.folio, s.paso = cita["folio"], "comprobante"
+        return [_t(f"Tu cita {cita['folio']} está apartada: falta el comprobante de tu anticipo. "
+                   "Envíamelo aquí (foto, captura o PDF) o escribe *cancelar* para liberar el horario.")], s
 
     s.folio = cita["folio"]
     s.servicio_id = cita["servicio_id"]
     s.paso = "citas_accion"
     aviso = ""
-    if _fuera_de_ventana(cita, datos):
+    if _fuera_de_ventana(cita, datos) and not cita.get("anticipo_monto"):
         aviso = "\n\nOjo: falta menos de 2 h, así que el cambio lo confirma la manicurista."
     return [_t(f"Encontré tu cita.\n\n{_resumen_cita(cita, datos)}{aviso}"),
             _b("¿Qué quieres hacer?", [("reagendar", "Mover a otro horario"),
@@ -1135,15 +1325,36 @@ async def _paso_citas_accion(s: Sesion, txt: str, texto: str, datos: dict[str, A
                                        ("menu", "Nada, gracias")])], s
 
 
-async def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
+async def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any], confirmado: bool = False):
     cita = store.obtener(folio)
     if not _folio_autorizado(s, cita):
         cita = None            # a partir de aquí se comporta como "no existe"
-    if not cita or cita["estado"] == "cancelada":
+    if not cita or cita["estado"] in ("cancelada", "expirada"):
         s.paso = "inicio"
         return [_t("Ese folio no tiene una cita activa. ¿Te ayudo con otra cosa?"),
                 _b("Menú:", MENU)], s
-    if _fuera_de_ventana(cita, datos):
+    if cita["estado"] == "pendiente":
+        # Apartado sin pagar: no hay anticipo que perder.
+        store.cancelar(cita["folio"])
+        s.folio, s.paso = None, "fin"
+        return [_t(f"Listo, liberé el horario que tenías apartado ({_etiqueta_slot(cita['slot'])})."),
+                _b("¿Algo más?", MENU)], s
+
+    con_anticipo = bool(cita.get("anticipo_monto"))
+    devuelve = False
+    if con_anticipo:
+        # Con anticipo manda la política del negocio (no la ventana de 2 h): se puede cancelar
+        # siempre, pero la clienta debe saber qué pasa con su dinero antes de confirmar.
+        c = anticipo.cfg(datos)
+        devuelve = anticipo.cancelacion_devuelve(c, anticipo.horas_para(cita["slot"], reloj.ahora()))
+        if not confirmado:
+            s.folio, s.paso = cita["folio"], "cancelar_confirmar"
+            consecuencia = ("Tu anticipo se te devuelve (la manicurista te contactará)." if devuelve
+                            else f"Si cancelas pierdes el anticipo de ${cita['anticipo_monto']:,}.")
+            return [_b(f"{consecuencia} ¿Confirmas que quieres cancelar la cita {cita['folio']} "
+                       f"del {_etiqueta_slot(cita['slot'])}?",
+                       [("cancelar_si", "Sí, cancelar"), ("cancelar_no", "Conservar mi cita")])], s
+    elif _fuera_de_ventana(cita, datos):
         s.handoff = True
         s.paso = "humano"
         return [_t(f"Falta menos de {datos['reglas_agenda']['cancelacion_libre_hasta_horas']} h para tu cita "
@@ -1157,20 +1368,66 @@ async def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any]):
     s.folio = None
     s.paso = "fin"
     s.resuelta = True
+    if con_anticipo:
+        sv = _servicio(datos, cita["servicio_id"]) or {"nombre": cita["servicio_id"]}
+        await asyncio.to_thread(
+            avisos.notificar_cancelacion_anticipo, cita=cita, servicio=sv["nombre"],
+            etiqueta=_etiqueta_slot(cita["slot"]), telefono=cita.get("telefono") or s.telefono, devuelve=devuelve)
+        destino = (f"Tu anticipo de ${cita['anticipo_monto']:,} se te devuelve: la manicurista te contactará para hacerlo."
+                   if devuelve else f"El anticipo de ${cita['anticipo_monto']:,} no se devuelve, como quedamos al agendar.")
+        return [_t(f"Cancelada la cita {cita['folio']} del {_etiqueta_slot(cita['slot'])}. {destino}"),
+                _b("¿Algo más?", MENU)], s
     return [_t(f"Cancelada la cita {cita['folio']} del {_etiqueta_slot(cita['slot'])}. "
                "El horario ya quedó libre.\n\nSi quieres, agendamos otro día."),
             _b("¿Algo más?", MENU)], s
+
+
+async def _paso_cancelar_confirmar(s: Sesion, txt: str, datos: dict[str, Any]):
+    if txt in SI_CANCELAR:
+        return await _cancelar_folio(s, s.folio or "", datos, confirmado=True)
+    if txt in NO_CANCELAR:
+        s.paso = "inicio"
+        return [_t("Va, tu cita se queda como está."), _b("¿Algo más?", MENU)], s
+    return await _cancelar_folio(s, s.folio or "", datos)          # no entendió: vuelve a preguntar
+
+
+def _no_se_puede_mover(s: Sesion, cita: dict[str, Any], c: dict[str, Any], motivo: str, horas: float):
+    """Con anticipo, mover tiene reglas. Se explica y se ofrecen las dos salidas honestas."""
+    r = c["reagendar"]
+    if motivo == "max_veces":
+        veces = int(cita.get("reagendadas") or 0)
+        razon = f"Esta cita ya se movió {veces} {'vez' if veces == 1 else 'veces'} y no se puede mover otra vez."
+    elif motivo == "poco_tiempo":
+        razon = (f"Faltan menos de {int(r['horas_minimas'])} h para tu cita y ya no se puede mover "
+                 "sin perder el anticipo.")
+    else:
+        razon = "Esta cita no se puede mover."
+    devuelve = anticipo.cancelacion_devuelve(c, horas)
+    salida = ("Si ya no puedes asistir, puedes cancelarla y tu anticipo se te devuelve." if devuelve
+              else f"Si ya no puedes asistir, puedes cancelarla (se pierde el anticipo de ${cita['anticipo_monto']:,}).")
+    s.folio, s.paso = cita["folio"], "citas_accion"
+    return [_b(f"{razon}\n{salida}", [("cancelar", "Cancelar mi cita"), ("menu", "Conservar mi cita")])], s
 
 
 def _empezar_reagendar(s: Sesion, folio: str, datos: dict[str, Any]):
     cita = store.obtener(folio)
     if not _folio_autorizado(s, cita):
         cita = None            # a partir de aquí se comporta como "no existe"
-    if not cita or cita["estado"] == "cancelada":
+    if not cita or cita["estado"] in ("cancelada", "expirada"):
         s.paso = "inicio"
         return [_t("Ese folio no tiene una cita activa. ¿Te ayudo con otra cosa?"),
                 _b("Menú:", MENU)], s
-    if _fuera_de_ventana(cita, datos):
+    if cita["estado"] == "pendiente":
+        s.folio, s.paso = cita["folio"], "comprobante"
+        return [_t("Esa cita todavía está apartada: falta el comprobante de tu anticipo. "
+                   "Si prefieres otro horario, escribe *cancelar* y agendamos de nuevo.")], s
+    if cita.get("anticipo_monto"):
+        c = anticipo.cfg(datos)
+        horas = anticipo.horas_para(cita["slot"], reloj.ahora())
+        permitido, motivo = anticipo.reagendar_permitido(c, int(cita.get("reagendadas") or 0), horas)
+        if not permitido:
+            return _no_se_puede_mover(s, cita, c, motivo, horas)
+    elif _fuera_de_ventana(cita, datos):
         s.handoff = True
         s.paso = "humano"
         return [_t(f"Falta menos de {datos['reglas_agenda']['cancelacion_libre_hasta_horas']} h para tu cita, "
@@ -1196,7 +1453,7 @@ async def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any
     cita = store.obtener(folio)
     if not _folio_autorizado(s, cita):
         cita = None            # volver a comprobar antes de modificar la cita
-    if not cita or cita["estado"] == "cancelada":
+    if not cita or cita["estado"] in ("cancelada", "expirada"):
         s.paso = "inicio"
         return [_t("Esa cita ya no está activa."), _b("Menú:", MENU)], s
     sid = cita["servicio_id"]
@@ -1232,6 +1489,7 @@ async def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any
 
     s.paso = "fin"
     s.resuelta = True
-    return [_t(f"Movida. Tu cita {nueva['folio']} ahora es {_etiqueta_slot(nueva['slot'])}. "
+    conserva = " Conservas tu anticipo." if nueva.get("anticipo_monto") else ""
+    return [_t(f"Movida. Tu cita {nueva['folio']} ahora es {_etiqueta_slot(nueva['slot'])}.{conserva} "
                f"Te esperamos en {datos['direccion']}."),
             _b("¿Algo más?", MENU)], s

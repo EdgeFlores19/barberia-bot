@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import acceso, calendar_sync, config, engine, seed, store, whatsapp_webhook
+from . import acceso, anticipo, calendar_sync, config, engine, seed, store, whatsapp_webhook
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +30,10 @@ app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 app.include_router(whatsapp_webhook.router)
 
 DATOS = engine.cargar_datos()
+# Falla cerrado: con el anticipo activo, un dato de pago faltante o mal escrito (una CLABE con un
+# dígito de más o de menos) mandaría el dinero de las clientas a ninguna parte.
+if anticipo.activo(DATOS) and (_problemas := anticipo.problemas_de_pago()):
+    raise RuntimeError("El anticipo está activo pero los datos de pago no están bien: " + "; ".join(_problemas))
 store.init()
 if config.SEED_DEMO:
     # El plan free de Render reinicia el disco: sin esto la agenda abre vacía.
@@ -134,7 +138,7 @@ async def mensaje(request: Request, body: Entrada):
     }
 
 
-_SIN_DATOS_PERSONALES = ("telefono", "calendar_event_id")
+_SIN_DATOS_PERSONALES = ("telefono", "calendar_event_id", "comprobante_media_id")
 
 
 def _exige_admin(x_admin_token: str | None) -> None:

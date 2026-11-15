@@ -16,7 +16,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from . import avisos, config, engine, store, wa_cliente, whatsapp_formato
+from . import anticipo, avisos, config, engine, store, wa_cliente, whatsapp_formato
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +70,8 @@ def firma_valida(cuerpo: bytes, cabecera: str) -> bool:
 # El aviso de "solo entiendo texto" queda solo para image, audio, video, document,
 # sticker y location (Tarea 18).
 TIPOS_IGNORADOS = frozenset({"reaction", "unsupported", "system", "errors", "ephemeral"})
+# Foto, captura o PDF: con el anticipo activo son el comprobante.
+TIPOS_MEDIA = frozenset({"image", "document"})
 
 
 def extraer_mensajes(payload: dict[str, Any]) -> list[dict[str, str]]:
@@ -85,6 +87,10 @@ def extraer_mensajes(payload: dict[str, Any]) -> list[dict[str, str]]:
                 if tipo in TIPOS_IGNORADOS:
                     continue          # reaction, unsupported, system, errors, ...
                 texto = ""
+                media: dict[str, str] = {}
+                if tipo in TIPOS_MEDIA:
+                    medio = msg.get(tipo) or {}
+                    media = {"media_id": str(medio.get("id") or ""), "mime": str(medio.get("mime_type") or "")}
                 if tipo == "text":
                     texto = ((msg.get("text") or {}).get("body") or "").strip()
                 elif tipo == "interactive":
@@ -92,7 +98,7 @@ def extraer_mensajes(payload: dict[str, Any]) -> list[dict[str, str]]:
                     elegido = inter.get("button_reply") or inter.get("list_reply") or {}
                     texto = str(elegido.get("id") or "").strip()
                 if msg_id and wa_id:
-                    salida.append({"id": msg_id, "wa_id": wa_id, "texto": texto, "tipo": tipo})
+                    salida.append({"id": msg_id, "wa_id": wa_id, "texto": texto, "tipo": tipo, **media})
     return salida
 
 
@@ -119,14 +125,18 @@ async def procesar_evento(payload: dict[str, Any], enviar: Enviador | None = Non
                 log.info("wa: evento repetido (reintento de Meta)")
                 continue
 
+            media = None
             if not msg["texto"]:
-                await _enviar(msg["wa_id"], [{"tipo": "texto", "texto": AVISO_SIN_TEXTO}], enviar)
-                atendidos += 1
-                continue
+                if msg["tipo"] in TIPOS_MEDIA and msg.get("media_id") and anticipo.activo(_datos()):
+                    media = {"tipo": msg["tipo"], "id": msg["media_id"], "mime": msg.get("mime", "")}
+                else:
+                    await _enviar(msg["wa_id"], [{"tipo": "texto", "texto": AVISO_SIN_TEXTO}], enviar)
+                    atendidos += 1
+                    continue
 
             # El motor registra el KPI del handoff y deja la sesión con su teléfono.
             respuestas, _ = await engine.manejar(
-                f"wa:{msg['wa_id']}", msg["texto"], _datos(), canal="wa", telefono=msg["wa_id"]
+                f"wa:{msg['wa_id']}", msg["texto"], _datos(), canal="wa", telefono=msg["wa_id"], media=media
             )
             await _enviar(msg["wa_id"], respuestas, enviar)
             atendidos += 1
