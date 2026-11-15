@@ -21,6 +21,9 @@ DEFECTOS: dict[str, Any] = {
     "apartado_minutos": 60,
     "apartado_minutos_mismo_dia": 30,
     "alerta_inmediata_horas": 24,
+    # False = todo comprobante se avisa en el momento (hasta que exista el resumen diario).
+    # True = solo lo urgente (cita en menos de `alerta_inmediata_horas`); el resto, al resumen.
+    "resumen_diario": False,
     "cancelar": {"reembolso": "nunca", "horas": 0},        # "nunca" | "hasta_horas"
     "reagendar": {"permitido": True, "max_veces": 1, "horas_minimas": 24, "conserva_anticipo": True},
     "resumen_hora": "20:00",

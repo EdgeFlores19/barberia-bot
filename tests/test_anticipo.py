@@ -28,6 +28,7 @@ def test_los_valores_acordados_son_los_por_defecto():
     assert c["descuenta_del_total"] is True
     assert (c["apartado_minutos"], c["apartado_minutos_mismo_dia"]) == (60, 30)
     assert c["alerta_inmediata_horas"] == 24
+    assert c["resumen_diario"] is False        # hasta que exista el resumen, todo se avisa en el momento
     assert c["cancelar"]["reembolso"] == "nunca"
     assert c["reagendar"] == {"permitido": True, "max_veces": 1, "horas_minimas": 24, "conserva_anticipo": True}
 
