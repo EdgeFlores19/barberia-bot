@@ -91,7 +91,8 @@ CREATE INDEX IF NOT EXISTS ix_wa_uso_telefono_momento ON wa_uso (telefono, momen
 CREATE TABLE IF NOT EXISTS resumen_envios (
     dia          TEXT PRIMARY KEY,
     enviado      TEXT NOT NULL,
-    total_citas  INTEGER NOT NULL DEFAULT 0
+    total_citas  INTEGER NOT NULL DEFAULT 0,
+    corte        TEXT
 );
 """
 
@@ -129,6 +130,13 @@ def _migrar_citas(con: sqlite3.Connection) -> None:
         raise
 
 
+def _agregar_columna(con: sqlite3.Connection, tabla: str, columna: str, tipo: str) -> None:
+    """ALTER TABLE ... ADD COLUMN si falta (SQLite no tiene IF NOT EXISTS para columnas)."""
+    existentes = {f["name"] for f in con.execute(f"PRAGMA table_info({tabla})").fetchall()}
+    if columna not in existentes:
+        con.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
+
+
 def init() -> None:
     """Crea el esquema la primera vez (y migra bases viejas). Idempotente."""
     global _inicializada
@@ -141,6 +149,7 @@ def init() -> None:
         with _con() as con:
             _migrar_citas(con)
             con.executescript(ESQUEMA)
+            _agregar_columna(con, "resumen_envios", "corte", "TEXT")
         _inicializada = True
 
 
@@ -411,13 +420,30 @@ def resumen_hecho(dia: str) -> bool:
         return con.execute("SELECT 1 FROM resumen_envios WHERE dia = ?", (dia,)).fetchone() is not None
 
 
-def resumen_marcar(dia: str, total: int = 0) -> None:
-    """Anota que el concentrado de `dia` ya se mandó (idempotente)."""
+def resumen_marcar(dia: str, total: int = 0, corte: str | None = None) -> None:
+    """Anota que el concentrado de `dia` ya se mandó (idempotente).
+
+    `corte` es el instante hasta el que llegaba ESE concentrado (se toma al armarlo, no al
+    mandarlo): el siguiente cubre desde ahí, sin dejar huecos ni repetir depósitos.
+    """
     init()
     with _candado, _con() as con:
         con.execute(
-            "INSERT INTO resumen_envios (dia, enviado, total_citas) VALUES (?, ?, ?)"
+            "INSERT INTO resumen_envios (dia, enviado, total_citas, corte) VALUES (?, ?, ?, ?)"
             " ON CONFLICT (dia) DO UPDATE SET enviado = excluded.enviado,"
-            " total_citas = excluded.total_citas",
-            (dia, _ahora(), int(total)),
+            " total_citas = excluded.total_citas, corte = excluded.corte",
+            (dia, _ahora(), int(total), corte),
         )
+
+
+def ultimo_corte() -> str | None:
+    """Hasta cuándo llegó el último concentrado mandado (None si nunca se ha mandado uno).
+
+    Las filas anteriores a la columna `corte` no la tienen: se usa su hora de envío.
+    """
+    init()
+    with _con() as con:
+        fila = con.execute(
+            "SELECT COALESCE(corte, enviado) AS corte FROM resumen_envios ORDER BY dia DESC LIMIT 1"
+        ).fetchone()
+    return fila["corte"] if fila else None
