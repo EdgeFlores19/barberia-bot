@@ -167,3 +167,32 @@ def test_la_confirmacion_dice_que_el_pago_se_verifica_y_muestra_el_resto():
                                       folio="AMB-7K4Z", precio=350)
 
     assert "verificará" in t and "Resta por pagar: $150" in t and "AMB-7K4Z" in t
+
+
+# ---------- el anticipo nunca pasa del precio del servicio ----------
+def test_el_anticipo_se_topa_en_el_precio_si_el_servicio_es_mas_barato():
+    c = anticipo.cfg(_datos())
+
+    assert anticipo.monto_para(c, 350) == 200
+    assert anticipo.monto_para(c, 180) == 180
+    assert anticipo.restante(180, c) == 0
+
+
+def test_si_no_se_descuenta_el_anticipo_no_se_topa():
+    c = anticipo.cfg(_datos(descuenta_del_total=False))
+
+    assert anticipo.monto_para(c, 180) == 200
+
+
+def test_el_aviso_de_un_servicio_barato_cobra_su_precio_y_dice_que_cubre_el_total():
+    t = anticipo.texto_aviso(anticipo.cfg(_datos()), precio=180)
+
+    assert "$180" in t and "$200" not in t
+    assert "cubre el total" in t.lower() and "te resta pagar" not in t
+
+
+def test_el_texto_de_pago_de_un_servicio_barato_pide_su_precio():
+    t = anticipo.texto_pago(anticipo.cfg(_datos()), folio="AMB-7K4Z", minutos=60, banco="Banco",
+                            clabe=CLABE_OK, titular="Titular", precio=180)
+
+    assert "Transfiere $180" in t

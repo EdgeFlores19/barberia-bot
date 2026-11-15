@@ -64,6 +64,7 @@ Híbrido, con el LLM en un carril estrecho:
 | FAQ y texto libre | DeepSeek redacta, **anclado** al JSON del negocio |
 | Salida del LLM | `llm._guardia` la revisa: si inventa enlace, teléfono, monto, promesa o HTML, se descarta y contesta la respuesta local ([ADR 0005](docs/adr/0005-guardia-llm-prompt-injection.md)) |
 | Sin `DEEPSEEK_API_KEY` o si la API falla | Matching local por tags; el bot sigue respondiendo |
+| Anticipo al agendar (opcional, solo WhatsApp) | Reglas y la política configurada del negocio; el dueño verifica el pago ([ADR 0008](docs/adr/0008-anticipo-con-comprobante.md)) |
 
 ## Arrancar en local
 
@@ -149,6 +150,7 @@ Lo que falta para operar de verdad está en los issues del repo.
 | [`0005`](docs/adr/0005-guardia-llm-prompt-injection.md) | Guardia de entrada y salida del LLM contra prompt injection |
 | [`0006`](docs/adr/0006-disco-persistente-starter.md) | Plan Starter con disco persistente: reemplaza la decisión del ADR 0002 |
 | [`0007`](docs/adr/0007-calendar-bloquea-huecos.md) | Los eventos manuales de Calendar bloquean huecos: se lee para bloquear, no para autorizar |
+| [`0008`](docs/adr/0008-anticipo-con-comprobante.md) | Anticipo al agendar: apartado, comprobante por WhatsApp y verificación del dueño |
 
 ## Deploy (Render, plan Starter)
 

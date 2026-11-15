@@ -388,3 +388,20 @@ def test_con_el_anticipo_apagado_agendar_funciona_como_siempre(datos, dueno):
 
     cita = store.listar()[-1]
     assert (cita["estado"], cita["anticipo_monto"]) == ("confirmada", 0)
+
+
+def test_un_servicio_mas_barato_que_el_anticipo_cobra_solo_su_precio(datos, dueno):
+    barato = min(datos["servicios"], key=lambda x: x["precio"])
+    assert barato["precio"] < 200, "los datos de ejemplo traen un servicio de menos de $200"
+    slot = [x for x in engine.slots_disponibles(datos, barato["id"])
+            if datetime.fromisoformat(x) >= reloj.ahora() + timedelta(hours=49)][0]
+    _decir("agendar", datos)
+    _decir(barato["id"], datos)
+    _decir(slot, datos)
+    aviso = _decir("Cliente de Prueba", datos)
+
+    pago = _decir("acepto_anticipo", datos)
+
+    assert f"${barato['precio']}" in _textos(aviso) and "cubre el total" in _textos(aviso).lower()
+    assert store.listar()[-1]["anticipo_monto"] == barato["precio"]
+    assert f"Transfiere ${barato['precio']}" in _textos(pago)

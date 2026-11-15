@@ -54,10 +54,16 @@ def monto(c: dict[str, Any]) -> int:
     return int(c["monto"])
 
 
+def monto_para(c: dict[str, Any], precio: int | float) -> int:
+    """Anticipo de ese servicio. Si se descuenta del total, no puede pasar del precio:
+    nadie debe pagar de anticipo más de lo que cuesta lo que va a hacerse."""
+    return min(monto(c), int(precio)) if c["descuenta_del_total"] else monto(c)
+
+
 def restante(precio: int | float, c: dict[str, Any]) -> int:
     """Lo que falta pagar al llegar. Nunca negativo."""
     precio = int(precio)
-    return max(precio - monto(c), 0) if c["descuenta_del_total"] else precio
+    return max(precio - monto_para(c, precio), 0) if c["descuenta_del_total"] else precio
 
 
 # ---------- datos de pago ----------
@@ -146,14 +152,21 @@ def _politica(c: dict[str, Any]) -> str:
 
 def texto_aviso(c: dict[str, Any], precio: int | float) -> str:
     """Lo que se le dice a la clienta ANTES de mostrarle la cuenta (y se guarda su aceptación)."""
-    cuenta = (f" Se descuenta del total de tu servicio (te resta pagar {_pesos(restante(precio, c))})."
-              if c["descuenta_del_total"] else " No forma parte del precio de tu servicio.")
-    return (f"Para apartar tu cita pedimos un anticipo de {_pesos(monto(c))}.{cuenta}\n"
+    resta = restante(precio, c)
+    if not c["descuenta_del_total"]:
+        cuenta = " No forma parte del precio de tu servicio."
+    elif resta == 0:
+        cuenta = " Cubre el total de tu servicio."
+    else:
+        cuenta = f" Se descuenta del total de tu servicio (te resta pagar {_pesos(resta)})."
+    return (f"Para apartar tu cita pedimos un anticipo de {_pesos(monto_para(c, precio))}.{cuenta}\n"
             f"Importante: {_politica(c)}.\n¿Estás de acuerdo?")
 
 
-def texto_pago(c: dict[str, Any], folio: str, minutos: int, banco: str, clabe: str, titular: str) -> str:
-    return (f"Transfiere {_pesos(monto(c))} a:\n"
+def texto_pago(c: dict[str, Any], folio: str, minutos: int, banco: str, clabe: str, titular: str,
+               precio: int | float | None = None) -> str:
+    cuanto = monto(c) if precio is None else monto_para(c, precio)
+    return (f"Transfiere {_pesos(cuanto)} a:\n"
             f"• Banco: {banco}\n• CLABE: {clabe}\n• Titular: {titular}\n"
             f"• Concepto: tu nombre y {folio}\n\n"
             f"Tienes {minutos} min para enviarme aquí el comprobante (foto, captura o PDF). "
@@ -163,5 +176,5 @@ def texto_pago(c: dict[str, Any], folio: str, minutos: int, banco: str, clabe: s
 def texto_comprobante_ok(c: dict[str, Any], servicio: str, etiqueta: str, folio: str, precio: int | float) -> str:
     resta = (f" Resta por pagar: {_pesos(restante(precio, c))}." if c["descuenta_del_total"] else "")
     return (f"Recibí tu comprobante ✅ Tu cita queda agendada: {servicio}, {etiqueta}. Folio {folio}.\n"
-            f"Anticipo: {_pesos(monto(c))}.{resta}\n"
+            f"Anticipo: {_pesos(monto_para(c, precio))}.{resta}\n"
             "La manicurista verificará tu pago; si algo no cuadra, te escribirá.")

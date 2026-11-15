@@ -1163,7 +1163,7 @@ async def _paso_anticipo_aceptar(s: Sesion, txt: str, datos: dict[str, Any]):
     vence = (ahora + timedelta(minutes=minutos)).isoformat(timespec="seconds")
     try:
         cita = store.crear(slot, sid, nombre, s.telefono, pendiente_hasta=vence,
-                           anticipo=anticipo.monto(c), aceptado_en=ahora_iso, ahora=ahora_iso)
+                           anticipo=anticipo.monto_para(c, sv["precio"]), aceptado_en=ahora_iso, ahora=ahora_iso)
     except store.SlotOcupado:
         s.pagina_horas = 0
         return _menu_horas(s, datos, sid, slot[:10], "Justo alguien más tomó ese horario. Elige otro:")
@@ -1174,7 +1174,7 @@ async def _paso_anticipo_aceptar(s: Sesion, txt: str, datos: dict[str, Any]):
     s.dia_fecha = None
     s.pagina_horas = 0
     return [_t(anticipo.texto_pago(c, cita["folio"], minutos, config.ANTICIPO_BANCO,
-                                   config.ANTICIPO_CLABE, config.ANTICIPO_TITULAR))], s
+                                   config.ANTICIPO_CLABE, config.ANTICIPO_TITULAR, sv["precio"]))], s
 
 
 async def _paso_comprobante(s: Sesion, txt: str, datos: dict[str, Any]):
@@ -1404,7 +1404,7 @@ def _no_se_puede_mover(s: Sesion, cita: dict[str, Any], c: dict[str, Any], motiv
         razon = "Esta cita no se puede mover."
     devuelve = anticipo.cancelacion_devuelve(c, horas)
     salida = ("Si ya no puedes asistir, puedes cancelarla y tu anticipo se te devuelve." if devuelve
-              else f"Si ya no puedes asistir, puedes cancelarla (se pierde el anticipo de ${anticipo.monto(c):,}).")
+              else f"Si ya no puedes asistir, puedes cancelarla (se pierde el anticipo de ${cita['anticipo_monto']:,}).")
     s.folio, s.paso = cita["folio"], "citas_accion"
     return [_b(f"{razon}\n{salida}", [("cancelar", "Cancelar mi cita"), ("menu", "Conservar mi cita")])], s
 
