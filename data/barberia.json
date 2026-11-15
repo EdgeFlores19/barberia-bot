@@ -178,5 +178,24 @@
       "respuesta": "El gelish cuesta $300 y dura unas tres semanas. Los diseños sencillos van incluidos; el arte con pedrería se cotiza al llegar."
     }
   ],
-  "fallback": "No quiero inventarte datos. Puedo ayudarte con precios, horario, ubicación, formas de pago o agendar tu cita — o te paso con la manicurista."
+  "fallback": "No quiero inventarte datos. Puedo ayudarte con precios, horario, ubicación, formas de pago o agendar tu cita — o te paso con la manicurista.",
+  "anticipo": {
+    "activo": false,
+    "monto": 200,
+    "descuenta_del_total": true,
+    "apartado_minutos": 60,
+    "apartado_minutos_mismo_dia": 30,
+    "alerta_inmediata_horas": 24,
+    "resumen_diario": false,
+    "cancelar": {
+      "reembolso": "nunca"
+    },
+    "reagendar": {
+      "permitido": true,
+      "max_veces": 1,
+      "horas_minimas": 24,
+      "conserva_anticipo": true
+    },
+    "resumen_hora": "20:00"
+  }
 }
