@@ -53,9 +53,14 @@ def _concentrado_si_toca() -> None:
     if not avisos.concentrado_configurado():
         log.warning("concentrado: toca mandarlo y Telegram no está configurado")
         return
-    r = concentrado.reporte(DATOS, store.listar(), desde=dia, hasta=dia)
-    if avisos.notificar_concentrado(r["texto"], r["n"]):
-        store.resumen_marcar(dia, r["n"])       # solo si de verdad salió
+    # Desde el último corte mandado (o desde hoy a las 00:00 si es el primero): así un depósito que
+    # llegó después de la hora de ayer sale hoy, y un día sin resumen se recupera en el siguiente.
+    # El corte es el instante en que se ARMA el reporte, no en que termina de salir.
+    corte = ahora.isoformat(timespec="seconds")
+    r = concentrado.reporte_ventana(DATOS, store.listar(), despues=store.ultimo_corte() or f"{dia}T00:00:00",
+                                    hasta=corte)
+    if avisos.notificar_concentrado_partes(r["partes"], r["n"]):
+        store.resumen_marcar(dia, r["n"], corte=corte)       # solo si de verdad salió
     else:
         log.error("concentrado: no salió; se reintenta en el próximo ciclo")
 

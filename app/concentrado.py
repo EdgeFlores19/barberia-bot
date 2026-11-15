@@ -5,9 +5,14 @@ No hay sistema de confirmación de depósitos y no se quiere. El aviso instantá
 lista con teléfono y monto para que la cuadre contra su estado de cuenta, y el resumen que
 sale todos los días a la hora configurada.
 
-La ventana de fechas es la FECHA DEL DEPÓSITO (`comprobante_en`), no la de la cita: el
-reporte es el corte del día contra el banco. La fecha de la cita va en cada línea, que es lo
-que le dice a qué servicio corresponde el dinero.
+La ventana es el momento del DEPÓSITO (`comprobante_en`), no la fecha de la cita: el reporte es
+el corte contra el banco. La fecha de la cita va en cada línea, que es lo que le dice a qué
+servicio corresponde el dinero.
+
+Hay dos formas de pedirlo. Por fechas (`reporte`: lo que se consulta a mano) y por CORTE
+(`reporte_ventana`: lo que manda solo cada día): desde el último concentrado mandado hasta ahora.
+Por fechas, un depósito que llega después de la hora del resumen no salía en ninguno: el del día
+siguiente solo miraba su propio día. Por corte, cada depósito sale exactamente una vez.
 
 Sin I/O: se arma con los datos del negocio y las filas que le pasen, y se prueba solo.
 """
@@ -15,7 +20,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Callable
 
 from . import anticipo, reloj
 from .slots import DIAS, MESES
@@ -58,6 +63,13 @@ def _fecha_de(txt: Any) -> date | None:
         return None
 
 
+def _momento_de(txt: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(txt))
+    except (TypeError, ValueError):
+        return None
+
+
 # ---------- filas ----------
 def _servicio(datos: dict[str, Any], servicio_id: Any) -> dict[str, Any]:
     """Nombre y precio del servicio. Una cita de un servicio que ya no está: nombre = id, precio 0."""
@@ -67,17 +79,16 @@ def _servicio(datos: dict[str, Any], servicio_id: Any) -> dict[str, Any]:
     return {"nombre": str(servicio_id), "precio": 0}
 
 
-def filas(datos: dict[str, Any], citas: list[dict[str, Any]],
-          desde: date, hasta: date) -> list[dict[str, Any]]:
-    """Una fila por depósito dentro de la ventana, en orden de cita."""
+def _filas(datos: dict[str, Any], citas: list[dict[str, Any]],
+           dentro: Callable[[Any], bool]) -> list[dict[str, Any]]:
+    """Una fila por depósito que `dentro` acepte (recibe `comprobante_en`), en orden de cita."""
     c = anticipo.cfg(datos)
     descuenta = bool(c["descuenta_del_total"])
     salida: list[dict[str, Any]] = []
     for cita in citas:
         if cita.get("estado") not in CON_DEPOSITO:
             continue
-        depositado = _fecha_de(cita.get("comprobante_en"))
-        if depositado is None or not (desde <= depositado <= hasta):
+        if not dentro(cita.get("comprobante_en")):
             continue
         monto = int(cita.get("anticipo_monto") or 0)
         if monto <= 0:
@@ -101,6 +112,25 @@ def filas(datos: dict[str, Any], citas: list[dict[str, Any]],
     return sorted(salida, key=lambda f: (f["slot"], str(f["folio"])))
 
 
+def filas(datos: dict[str, Any], citas: list[dict[str, Any]],
+          desde: date, hasta: date) -> list[dict[str, Any]]:
+    """Depósitos cuya FECHA cae entre `desde` y `hasta` (ambas incluidas)."""
+    def dentro(txt: Any) -> bool:
+        d = _fecha_de(txt)
+        return d is not None and desde <= d <= hasta
+    return _filas(datos, citas, dentro)
+
+
+def filas_ventana(datos: dict[str, Any], citas: list[dict[str, Any]],
+                  despues: datetime, hasta: datetime) -> list[dict[str, Any]]:
+    """Depósitos con `despues < momento <= hasta`: el borde de abajo NO entra (ya salió en el
+    corte anterior) y el de arriba sí (así dos cortes seguidos no se pisan ni dejan hueco)."""
+    def dentro(txt: Any) -> bool:
+        m = _momento_de(txt)
+        return m is not None and despues < m <= hasta
+    return _filas(datos, citas, dentro)
+
+
 # ---------- reporte ----------
 def reporte(datos: dict[str, Any], citas: list[dict[str, Any]], desde: str | None = None,
             hasta: str | None = None, hoy: date | None = None) -> dict[str, Any]:
@@ -119,15 +149,47 @@ def reporte(datos: dict[str, Any], citas: list[dict[str, Any]], desde: str | Non
     return r
 
 
+def reporte_ventana(datos: dict[str, Any], citas: list[dict[str, Any]], despues: str, hasta: str) -> dict[str, Any]:
+    """El concentrado desde el último corte (`despues`, ISO) hasta `hasta` (ISO).
+
+    Devuelve además `partes`: el texto repartido en los mensajes que hagan falta, para que nada
+    se quede fuera por el límite de Telegram (la ventana ya avanzó: no habría otra oportunidad).
+    """
+    ini, fin = _momento_de(despues), _momento_de(hasta)
+    if ini is None or fin is None:
+        raise ValueError("despues/hasta deben ser fechas-hora ISO")
+    fs = filas_ventana(datos, citas, ini, fin)
+    r: dict[str, Any] = {
+        "desde": despues, "hasta": hasta, "ventana": True,
+        "n": len(fs),
+        "total_anticipo": sum(f["anticipo"] for f in fs),
+        "total_resta": sum(f["resta"] for f in fs),
+        "filas": fs,
+    }
+    r["texto"] = texto(r)
+    r["partes"] = partes(r)
+    return r
+
+
 def _fecha_corta(d: date) -> str:
     return f"{DIAS[d.weekday()][:3]} {d.day} {MESES[d.month - 1]}"
 
 
+def _momento_corto(iso: str) -> str:
+    m = datetime.fromisoformat(iso)
+    return f"{_fecha_corta(m.date())} {m:%H:%M}"
+
+
 def _cabecera(r: dict[str, Any]) -> str:
-    primero, ultimo = date.fromisoformat(r["desde"]), date.fromisoformat(r["hasta"])
-    cuando = _fecha_corta(primero) if primero == ultimo else f"{_fecha_corta(primero)} a {_fecha_corta(ultimo)}"
+    if r.get("ventana"):
+        cuando = f"desde {_momento_corto(r['desde'])} hasta {_momento_corto(r['hasta'])}"
+        vacio = "Sin depósitos nuevos desde el último concentrado."
+    else:
+        primero, ultimo = date.fromisoformat(r["desde"]), date.fromisoformat(r["hasta"])
+        cuando = _fecha_corta(primero) if primero == ultimo else f"{_fecha_corta(primero)} a {_fecha_corta(ultimo)}"
+        vacio = "Sin depósitos registrados en esa fecha."
     if not r["n"]:
-        return f"🧾 Concentrado de depósitos · {cuando}\nSin depósitos registrados en esa fecha."
+        return f"🧾 Concentrado de depósitos · {cuando}\n{vacio}"
     cuanto = f"{r['n']} depósito" if r["n"] == 1 else f"{r['n']} depósitos"
     return (f"🧾 Concentrado de depósitos · {cuando}\n"
             f"{cuanto} · ${r['total_anticipo']:,} en anticipos · ${r['total_resta']:,} por cobrar al llegar\n"
@@ -142,7 +204,10 @@ def _linea(f: dict[str, Any]) -> str:
     cabeza = f"• {cuando} · {f['servicio']}".replace("•  · ", "• ")
     if f["anulada"]:
         cabeza += " (cancelada: revisa la devolución)"
-    deposito = _fecha_corta(date.fromisoformat(f["depositado"][:10]))
+    momento = _momento_de(f["depositado"])
+    # Con la hora: el estado de cuenta del banco la trae y es lo que permite emparejar.
+    deposito = (f"{_fecha_corta(momento.date())} {momento:%H:%M}" if momento and len(f["depositado"]) >= 16
+                else _fecha_corta(date.fromisoformat(f["depositado"][:10])))
     tel = _con_mas(f["telefono"])
     return (f"{cabeza}\n"
             f"  {f['nombre']} · Folio {f['folio']}\n"
@@ -174,6 +239,37 @@ def texto(r: dict[str, Any]) -> str:
         faltan = r["n"] - puestas
         partes.append(f"… y {faltan} depósito{'s' if faltan != 1 else ''} más (pide el reporte completo).")
     return "\n\n".join(partes)
+
+
+# Espacio que se reserva para el rótulo "(parte i de k)" al repartir en varios mensajes.
+_RESERVA_PARTE = 60
+
+
+def partes(r: dict[str, Any]) -> list[str]:
+    """El concentrado en uno o varios mensajes: todos los depósitos, ninguno cortado.
+
+    Con pocos depósitos es un solo mensaje, idéntico a `texto(r)`.
+    """
+    cab = _cabecera(r)
+    if not r["filas"]:
+        return [cab]
+    grupos: list[list[str]] = [[]]
+    usados = len(cab) + _RESERVA_PARTE
+    for f in r["filas"]:
+        linea = _linea(f)
+        if grupos[-1] and usados + len(linea) + 2 > LIMITE_TELEGRAM:
+            grupos.append([])
+            usados = _RESERVA_PARTE
+        grupos[-1].append(linea)
+        usados += len(linea) + 2
+    k = len(grupos)
+    if k == 1:
+        return ["\n\n".join([cab] + grupos[0])]
+    salida = []
+    for i, g in enumerate(grupos, 1):
+        cabeza = f"{cab}\n(parte 1 de {k})" if i == 1 else f"🧾 Concentrado de depósitos (parte {i} de {k})"
+        salida.append("\n\n".join([cabeza] + g))
+    return salida
 
 
 # ---------- quién lo dispara ----------

@@ -88,6 +88,20 @@ def concentrado_configurado() -> bool:
     return bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
 
 
+def notificar_concentrado_partes(partes: list[str], n: int) -> bool:
+    """Manda el concentrado en orden. True solo si salieron TODAS las partes.
+
+    Si una falla, el día no se marca y se reintenta completo: preferible repetir una parte
+    que dejar depósitos sin avisar.
+    """
+    log.warning("concentrado: %s depósitos en %s mensaje(s)", n, len(partes))
+    for i, parte in enumerate(partes, 1):
+        if not _telegram(parte):
+            log.error("concentrado: falló el mensaje %s de %s", i, len(partes))
+            return False
+    return True
+
+
 def notificar_concentrado(texto: str, n: int) -> bool:
     """El concentrado de depósitos del día: la dueña lo cuadra a mano contra su banco."""
     log.warning("concentrado: %s depósitos enviados", n)
