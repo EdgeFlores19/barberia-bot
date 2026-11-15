@@ -8,9 +8,11 @@ from __future__ import annotations
 import secrets
 import sqlite3
 import threading
+from datetime import datetime, timedelta
 from typing import Any
 
 from . import config, reloj
+from .telefono import t10
 
 # Sin caracteres que se confundan al dictarlos por teléfono (0/O, 1/I/L).
 ALFABETO_FOLIO = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
@@ -28,7 +30,13 @@ class FolioNoEncontrado(Exception):
     """No hay cita con ese folio."""
 
 
-ESQUEMA = """
+class EstadoInvalido(Exception):
+    """La cita no está en un estado que admita esa operación."""
+
+
+# Estados: confirmada | cancelada | pendiente (apartada, esperando el comprobante del
+# anticipo) | expirada (el apartado venció sin comprobante).
+_CITAS_SQL = """
 CREATE TABLE IF NOT EXISTS citas (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     folio             TEXT NOT NULL UNIQUE,
@@ -37,14 +45,27 @@ CREATE TABLE IF NOT EXISTS citas (
     nombre            TEXT NOT NULL,
     telefono          TEXT NOT NULL DEFAULT '',
     estado            TEXT NOT NULL DEFAULT 'confirmada'
-                      CHECK (estado IN ('confirmada', 'cancelada')),
+                      CHECK (estado IN ('confirmada', 'cancelada', 'pendiente', 'expirada')),
     creada            TEXT NOT NULL,
     actualizada       TEXT NOT NULL,
-    calendar_event_id TEXT
-);
-CREATE INDEX IF NOT EXISTS ix_citas_slot ON citas (slot);
-CREATE INDEX IF NOT EXISTS ix_citas_estado ON citas (estado);
+    calendar_event_id TEXT,
+    anticipo_monto       INTEGER NOT NULL DEFAULT 0,
+    vence                TEXT,
+    aceptado_en          TEXT,
+    comprobante_en       TEXT,
+    comprobante_tipo     TEXT,
+    comprobante_media_id TEXT,
+    reagendadas          INTEGER NOT NULL DEFAULT 0
+)
+"""
+_INDICES_CITAS = (
+    "CREATE INDEX IF NOT EXISTS ix_citas_slot ON citas (slot)",
+    "CREATE INDEX IF NOT EXISTS ix_citas_estado ON citas (estado)",
+)
+_COLUMNAS_VIEJAS = "id, folio, slot, servicio_id, nombre, telefono, estado, creada, actualizada, calendar_event_id"
 
+ESQUEMA = _CITAS_SQL + ";\n" + ";\n".join(_INDICES_CITAS) + ";\n\n"
+ESQUEMA += """
 CREATE TABLE IF NOT EXISTS wa_eventos (
     id        TEXT PRIMARY KEY,
     recibido  TEXT NOT NULL
@@ -74,8 +95,34 @@ def _con() -> sqlite3.Connection:
     return con
 
 
+def _migrar_citas(con: sqlite3.Connection) -> None:
+    """Bases creadas antes del anticipo: reconstruye `citas` con los estados y columnas nuevos.
+
+    SQLite no deja cambiar un CHECK, así que se renombra, se crea la nueva y se copia, todo en
+    UNA transacción: si algo falla se deshace y la tabla vieja queda intacta (hay disco persistente).
+    """
+    fila = con.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'citas'").fetchone()
+    if fila is None or "'pendiente'" in fila["sql"]:
+        return
+    con.commit()
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        con.execute("ALTER TABLE citas RENAME TO citas_vieja")
+        con.execute("DROP INDEX IF EXISTS ix_citas_slot")
+        con.execute("DROP INDEX IF EXISTS ix_citas_estado")
+        con.execute(_CITAS_SQL)
+        for sql in _INDICES_CITAS:
+            con.execute(sql)
+        con.execute(f"INSERT INTO citas ({_COLUMNAS_VIEJAS}) SELECT {_COLUMNAS_VIEJAS} FROM citas_vieja")
+        con.execute("DROP TABLE citas_vieja")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
 def init() -> None:
-    """Crea el esquema la primera vez. Idempotente."""
+    """Crea el esquema la primera vez (y migra bases viejas). Idempotente."""
     global _inicializada
     if _inicializada:
         return
@@ -84,6 +131,7 @@ def init() -> None:
             return
         config.DB_FILE.parent.mkdir(parents=True, exist_ok=True)
         with _con() as con:
+            _migrar_citas(con)
             con.executescript(ESQUEMA)
         _inicializada = True
 
@@ -105,39 +153,54 @@ def _nuevo_folio(con: sqlite3.Connection) -> str:
     raise RuntimeError("No se pudo generar un folio único")
 
 
-def ocupados() -> set[str]:
-    """Slots ISO con una cita confirmada."""
+# Una cita bloquea el horario si está confirmada o si es un apartado que aún no vence.
+_BLOQUEA = "(estado = 'confirmada' OR (estado = 'pendiente' AND vence > ?))"
+
+
+def ocupados(ahora: str | None = None) -> set[str]:
+    """Slots ISO con una cita confirmada o un apartado vigente."""
     init()
     with _con() as con:
-        filas = con.execute("SELECT slot FROM citas WHERE estado = 'confirmada'").fetchall()
+        filas = con.execute(f"SELECT slot FROM citas WHERE {_BLOQUEA}", (ahora or _ahora(),)).fetchall()
     return {f["slot"] for f in filas}
 
 
-def confirmadas() -> list[dict[str, Any]]:
-    """Citas confirmadas: lo que consume la capa de disponibilidad."""
+def confirmadas(ahora: str | None = None) -> list[dict[str, Any]]:
+    """Citas que ocupan agenda: las confirmadas y los apartados vigentes (lo que consume slots)."""
     init()
     with _con() as con:
         filas = con.execute(
-            "SELECT folio, slot, servicio_id, nombre, estado FROM citas WHERE estado = 'confirmada'"
+            f"SELECT folio, slot, servicio_id, nombre, estado FROM citas WHERE {_BLOQUEA}",
+            (ahora or _ahora(),),
         ).fetchall()
     return [dict(f) for f in filas]
 
 
-def crear(slot: str, servicio_id: str, nombre: str, telefono: str = "") -> dict[str, Any]:
-    """Crea la cita. Lanza SlotOcupado si el horario ya está tomado."""
+def crear(
+    slot: str, servicio_id: str, nombre: str, telefono: str = "", *,
+    pendiente_hasta: str | None = None, anticipo: int = 0, aceptado_en: str | None = None,
+    ahora: str | None = None,
+) -> dict[str, Any]:
+    """Crea la cita. Lanza SlotOcupado si el horario ya está tomado.
+
+    Con `pendiente_hasta` (ISO) queda apartada, esperando el comprobante del anticipo,
+    y el horario se libera solo cuando esa hora pasa.
+    """
     init()
+    ahora = ahora or _ahora()
     with _candado, _con() as con:
         choque = con.execute(
-            "SELECT folio FROM citas WHERE slot = ? AND estado = 'confirmada'", (slot,)
+            f"SELECT folio FROM citas WHERE slot = ? AND {_BLOQUEA}", (slot, ahora)
         ).fetchone()
         if choque:
             raise SlotOcupado(slot)
         folio = _nuevo_folio(con)
-        ahora = _ahora()
+        estado = "pendiente" if pendiente_hasta else "confirmada"
         con.execute(
-            "INSERT INTO citas (folio, slot, servicio_id, nombre, telefono, estado, creada, actualizada)"
-            " VALUES (?, ?, ?, ?, ?, 'confirmada', ?, ?)",
-            (folio, slot, servicio_id, nombre, telefono, ahora, ahora),
+            "INSERT INTO citas (folio, slot, servicio_id, nombre, telefono, estado, creada, actualizada,"
+            " anticipo_monto, vence, aceptado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (folio, slot, servicio_id, nombre, telefono, estado, ahora, ahora,
+             anticipo, pendiente_hasta, aceptado_en),
         )
         fila = con.execute("SELECT * FROM citas WHERE folio = ?", (folio,)).fetchone()
     return _fila(fila) or {}
@@ -170,27 +233,83 @@ def cancelar(folio: str) -> dict[str, Any]:
     return _fila(fila) or {}
 
 
-def reagendar(folio: str, nuevo_slot: str) -> dict[str, Any]:
-    """Mueve la cita a otro horario. Lanza SlotOcupado si ya está tomado."""
+def reagendar(folio: str, nuevo_slot: str, ahora: str | None = None) -> dict[str, Any]:
+    """Mueve la cita a otro horario y cuenta el cambio. Lanza SlotOcupado si ya está tomado."""
     init()
+    ahora = ahora or _ahora()
     with _candado, _con() as con:
         fila = con.execute(
             "SELECT * FROM citas WHERE folio = ?", (folio.strip().upper(),)
         ).fetchone()
-        if not fila or fila["estado"] == "cancelada":
+        if not fila or fila["estado"] in ("cancelada", "expirada"):
             raise FolioNoEncontrado(folio)
         choque = con.execute(
-            "SELECT folio FROM citas WHERE slot = ? AND estado = 'confirmada' AND folio <> ?",
-            (nuevo_slot, fila["folio"]),
+            f"SELECT folio FROM citas WHERE slot = ? AND {_BLOQUEA} AND folio <> ?",
+            (nuevo_slot, ahora, fila["folio"]),
         ).fetchone()
         if choque:
             raise SlotOcupado(nuevo_slot)
         con.execute(
-            "UPDATE citas SET slot = ?, actualizada = ? WHERE folio = ?",
-            (nuevo_slot, _ahora(), fila["folio"]),
+            "UPDATE citas SET slot = ?, reagendadas = reagendadas + 1, actualizada = ? WHERE folio = ?",
+            (nuevo_slot, ahora, fila["folio"]),
         )
         nueva = con.execute("SELECT * FROM citas WHERE folio = ?", (fila["folio"],)).fetchone()
     return _fila(nueva) or {}
+
+
+def registrar_comprobante(folio: str, tipo: str, media_id: str, ahora: str | None = None) -> dict[str, Any]:
+    """El apartado pasa a cita confirmada. Funciona también si el apartado ya venció,
+    siempre que nadie más haya tomado el horario (si lo tomaron, SlotOcupado)."""
+    init()
+    ahora = ahora or _ahora()
+    with _candado, _con() as con:
+        fila = con.execute("SELECT * FROM citas WHERE folio = ?", (folio.strip().upper(),)).fetchone()
+        if not fila:
+            raise FolioNoEncontrado(folio)
+        if fila["estado"] not in ("pendiente", "expirada"):
+            raise EstadoInvalido(fila["estado"])
+        choque = con.execute(
+            f"SELECT folio FROM citas WHERE slot = ? AND {_BLOQUEA} AND folio <> ?",
+            (fila["slot"], ahora, fila["folio"]),
+        ).fetchone()
+        if choque:
+            raise SlotOcupado(fila["slot"])
+        con.execute(
+            "UPDATE citas SET estado = 'confirmada', comprobante_en = ?, comprobante_tipo = ?,"
+            " comprobante_media_id = ?, actualizada = ? WHERE folio = ?",
+            (ahora, tipo, media_id, ahora, fila["folio"]),
+        )
+        nueva = con.execute("SELECT * FROM citas WHERE folio = ?", (fila["folio"],)).fetchone()
+    return _fila(nueva) or {}
+
+
+def expirar_vencidas(ahora: str | None = None) -> list[dict[str, Any]]:
+    """Marca como expiradas las citas pendientes cuyo apartado ya venció y las devuelve."""
+    init()
+    ahora = ahora or _ahora()
+    with _candado, _con() as con:
+        filas = con.execute(
+            "SELECT * FROM citas WHERE estado = 'pendiente' AND vence <= ?", (ahora,)
+        ).fetchall()
+        for f in filas:
+            con.execute("UPDATE citas SET estado = 'expirada', actualizada = ? WHERE folio = ?", (ahora, f["folio"]))
+    return [{**dict(f), "estado": "expirada"} for f in filas]
+
+
+def apartado_reciente(telefono: str, ahora: str | None = None, gracia_horas: int = 24) -> dict[str, Any] | None:
+    """Cita pendiente (o expirada hace poco) de esa clienta: a la que corresponde un comprobante."""
+    init()
+    ahora_dt = reloj.ahora() if ahora is None else datetime.fromisoformat(ahora)
+    limite = (ahora_dt - timedelta(hours=gracia_horas)).isoformat(timespec="seconds")
+    with _con() as con:
+        filas = con.execute(
+            "SELECT * FROM citas WHERE estado IN ('pendiente', 'expirada') AND vence > ? ORDER BY creada DESC, id DESC",
+            (limite,),
+        ).fetchall()
+    for f in filas:
+        if f["telefono"] and t10(f["telefono"]) == t10(telefono):
+            return dict(f)
+    return None
 
 
 def set_evento(folio: str, event_id: str | None) -> None:

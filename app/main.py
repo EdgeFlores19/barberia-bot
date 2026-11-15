@@ -134,7 +134,7 @@ async def mensaje(request: Request, body: Entrada):
     }
 
 
-_SIN_DATOS_PERSONALES = ("telefono", "calendar_event_id")
+_SIN_DATOS_PERSONALES = ("telefono", "calendar_event_id", "comprobante_media_id")
 
 
 def _exige_admin(x_admin_token: str | None) -> None:
