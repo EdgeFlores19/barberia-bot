@@ -100,6 +100,13 @@ SESION_HUMANO_TTL_MIN = int(os.getenv("SESION_HUMANO_TTL_MIN", "720"))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
+# Concentrado de depósitos (app/concentrado.py). La hora sale del JSON del negocio
+# (`anticipo.resumen_hora`); aquí se decide si el proceso lo dispara por su cuenta.
+# RESUMEN_AUTO=0 lo apaga (el disparo manual por /api/depositos/enviar sigue funcionando).
+RESUMEN_AUTO = os.getenv("RESUMEN_AUTO", "1").strip().lower() not in {"0", "false", "no"}
+# Cada cuánto se pregunta si ya es la hora. 60 s basta: el reporte es de un día.
+RESUMEN_CICLO_S = float(os.getenv("RESUMEN_CICLO_S", "60"))
+
 
 def _lista_telefonos(valor: str) -> set[str]:
     """'521 55 0000 0011, 5500000022' -> {'5500000011', '5500000022'}"""

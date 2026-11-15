@@ -1,16 +1,20 @@
 """FastAPI: chat de demo con estética WhatsApp."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hmac
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import acceso, anticipo, calendar_sync, config, engine, seed, store, whatsapp_webhook
+from . import (acceso, anticipo, avisos, calendar_sync, concentrado, config, engine, reloj,
+               seed, store, whatsapp_webhook)
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +29,50 @@ if config.SESSION_SECRET_EFIMERA:
     log.warning("SESSION_SECRET no está definido: se generó uno temporal y las sesiones "
                 "abiertas se invalidan en cada reinicio.")
 
-app = FastAPI(title="Ambar — bot demo")
+# ---------- concentrado de depósitos: quién lo dispara ----------
+# Render no tiene cron en este plan y `resumen_hora` del JSON no programa nada por sí solo:
+# lo dispara este bucle, dentro del mismo proceso. Cada minuto pregunta si ya es la hora y si
+# hoy no se ha mandado (la respuesta vive en `resumen_envios`, así el reinicio del plan free
+# no lo repite ni lo pierde).
+async def _bucle_concentrado() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(_concentrado_si_toca)
+        except asyncio.CancelledError:
+            raise
+        except Exception:                       # un ciclo roto no puede matar el bucle
+            log.exception("concentrado: falló el ciclo")
+        await asyncio.sleep(config.RESUMEN_CICLO_S)
+
+
+def _concentrado_si_toca() -> None:
+    ahora = reloj.ahora()
+    dia = ahora.date().isoformat()
+    if not concentrado.toca_enviar(anticipo.cfg(DATOS), ahora, store.resumen_hecho(dia)):
+        return
+    if not avisos.concentrado_configurado():
+        log.warning("concentrado: toca mandarlo y Telegram no está configurado")
+        return
+    r = concentrado.reporte(DATOS, store.listar(), desde=dia, hasta=dia)
+    if avisos.notificar_concentrado(r["texto"], r["n"]):
+        store.resumen_marcar(dia, r["n"])       # solo si de verdad salió
+    else:
+        log.error("concentrado: no salió; se reintenta en el próximo ciclo")
+
+
+@asynccontextmanager
+async def _vida(_: FastAPI):
+    tarea = asyncio.create_task(_bucle_concentrado()) if config.RESUMEN_AUTO else None
+    try:
+        yield
+    finally:
+        if tarea is not None:
+            tarea.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await tarea
+
+
+app = FastAPI(title="Ambar — bot demo", lifespan=_vida)
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 app.include_router(whatsapp_webhook.router)
 
@@ -160,6 +207,44 @@ def citas(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"
             for c in store.listar()
         ]
     }
+
+
+@app.get("/api/depositos")
+def depositos(desde: str | None = None, hasta: str | None = None, formato: str = "json",
+              x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")):
+    """El concentrado de depósitos: qué entró, de quién y cuánto. Para cuadrar a mano.
+
+    `/api/citas` filtra teléfono y monto a propósito; aquí NO: sin teléfono no se reconoce el
+    depósito en el banco y sin monto no se cuadra. Por eso lleva el mismo candado (ADMIN_TOKEN).
+    """
+    _exige_admin(x_admin_token)
+    try:
+        r = concentrado.reporte(DATOS, store.listar(), desde=desde, hasta=hasta)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if formato == "texto":
+        return PlainTextResponse(r["texto"])
+    return r
+
+
+@app.post("/api/depositos/enviar")
+def depositos_enviar(desde: str | None = None, hasta: str | None = None,
+                     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")):
+    """Manda el concentrado por Telegram ahora mismo, sin esperar la hora.
+
+    Disparo manual: no marca el día como enviado, así el resumen de la noche sale igual.
+    """
+    _exige_admin(x_admin_token)
+    if not avisos.concentrado_configurado():
+        raise HTTPException(status_code=503,
+                            detail="Telegram no configurado: define TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID.")
+    try:
+        r = concentrado.reporte(DATOS, store.listar(), desde=desde, hasta=hasta)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    enviado = avisos.notificar_concentrado(r["texto"], r["n"])
+    return {"enviado": enviado, "n": r["n"], "desde": r["desde"], "hasta": r["hasta"],
+            "total_anticipo": r["total_anticipo"], "total_resta": r["total_resta"]}
 
 
 @app.get("/health")

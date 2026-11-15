@@ -11,9 +11,10 @@ from .telefono import t4
 log = logging.getLogger(__name__)
 
 
-def _telegram(texto: str) -> None:
+def _telegram(texto: str) -> bool:
+    """Manda por Telegram. Devuelve si de verdad salió (el concentrado no se marca si no)."""
     if not (config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID):
-        return
+        return False
     try:
         r = httpx.post(
             f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage",
@@ -21,10 +22,12 @@ def _telegram(texto: str) -> None:
             timeout=5,
         )
         r.raise_for_status()
+        return True
     except httpx.HTTPStatusError as exc:
         log.error("aviso: Telegram respondió %s", exc.response.status_code)   # nunca loguear exc: lleva la URL con el token
     except httpx.HTTPError as exc:
         log.error("aviso: error de red al avisar por Telegram (%s)", type(exc).__name__)
+    return False
 
 
 def notificar_handoff(sid: str, telefono: str, mensaje: str) -> None:
@@ -78,3 +81,14 @@ def notificar_cancelacion_anticipo(*, cita: dict, servicio: str, etiqueta: str,
 def notificar_alerta(texto: str) -> None:
     log.error("alerta: %s", texto)
     _telegram(f"⚠️ {texto}")
+
+
+def concentrado_configurado() -> bool:
+    """¿Hay a dónde mandar el concentrado? (El mismo canal que los avisos.)"""
+    return bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
+
+
+def notificar_concentrado(texto: str, n: int) -> bool:
+    """El concentrado de depósitos del día: la dueña lo cuadra a mano contra su banco."""
+    log.warning("concentrado: %s depósitos enviados", n)
+    return _telegram(texto)

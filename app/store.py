@@ -85,6 +85,14 @@ CREATE TABLE IF NOT EXISTS wa_uso (
 );
 CREATE INDEX IF NOT EXISTS ix_wa_uso_momento ON wa_uso (momento);
 CREATE INDEX IF NOT EXISTS ix_wa_uso_telefono_momento ON wa_uso (telefono, momento);
+
+-- Concentrado de depósitos ya mandado, por día. Evita que el resumen salga dos veces si el
+-- proceso se reinicia (o si el bucle de app/main.py vuelve a pasar por la misma hora).
+CREATE TABLE IF NOT EXISTS resumen_envios (
+    dia          TEXT PRIMARY KEY,
+    enviado      TEXT NOT NULL,
+    total_citas  INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -333,10 +341,15 @@ def listar(solo_confirmadas: bool = False) -> list[dict[str, Any]]:
 
 
 def reset() -> None:
-    """Vacía la tabla. Solo para pruebas y para reiniciar la demo."""
+    """Vacía las tablas de trabajo. Solo para pruebas y para reiniciar la demo.
+
+    Incluye `resumen_envios`: un reinicio de la demo también reinicia el día, y así el
+    concentrado se puede volver a mandar para verlo funcionar.
+    """
     init()
     with _candado, _con() as con:
         con.execute("DELETE FROM citas")
+        con.execute("DELETE FROM resumen_envios")
 
 
 def registrar_evento(evento_id: str) -> bool:
@@ -389,3 +402,22 @@ def wa_contar_desde(desde: str, telefono: str | None = None) -> int:
         args.append(telefono)
     with _con() as con:
         return con.execute(sql, args).fetchone()[0]
+
+
+def resumen_hecho(dia: str) -> bool:
+    """¿Ya salió el concentrado de ese día? Evita mandarlo dos veces."""
+    init()
+    with _con() as con:
+        return con.execute("SELECT 1 FROM resumen_envios WHERE dia = ?", (dia,)).fetchone() is not None
+
+
+def resumen_marcar(dia: str, total: int = 0) -> None:
+    """Anota que el concentrado de `dia` ya se mandó (idempotente)."""
+    init()
+    with _candado, _con() as con:
+        con.execute(
+            "INSERT INTO resumen_envios (dia, enviado, total_citas) VALUES (?, ?, ?)"
+            " ON CONFLICT (dia) DO UPDATE SET enviado = excluded.enviado,"
+            " total_citas = excluded.total_citas",
+            (dia, _ahora(), int(total)),
+        )
