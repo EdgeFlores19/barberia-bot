@@ -7,6 +7,9 @@ __pycache__/
 *.db-shm
 .pytest_cache/
 
+# Llaves de API (Render, etc.): nunca al repo, ni siquiera de prueba
+*api_key*
+
 # Credenciales de Google Calendar: nunca al repo
 google_token.json
 client_secret.json
