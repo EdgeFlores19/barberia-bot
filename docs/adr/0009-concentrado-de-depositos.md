@@ -1,6 +1,7 @@
 # ADR 0009 — El concentrado de depósitos: el corte del día para cuadrar a mano
 
-- **Estado:** aceptado y desplegado el 2026-11-15 (main `3d88cc5`, `/health` `ok: true`)
+- **Estado:** aceptado y desplegado el 2026-11-15; la ventana «desde el último corte» del
+  2026-11-16 vive en `main` `452fc02` (`/health` `ok: true`)
 - **Fecha:** 2026-11-15
 - **Alcance:** cómo se entera la dueña de qué depósitos entraron, sin inventar un sistema de
   confirmación que no se quiere.
@@ -75,3 +76,21 @@ Tres piezas, cada una con un solo trabajo:
   concentrado del día.
 - Si algún día se quiere avisar a la dueña por WhatsApp en vez de Telegram, cambia
   `avisos.notificar_concentrado`; el armado del reporte no se entera.
+
+## Enmienda del 2026-11-16: la ventana es «desde el último corte»
+
+El corte por día tenía un hueco: un comprobante que entraba después de la hora del resumen no
+salía en el de ese día (ya estaba marcado) ni en el siguiente (miraba solo su propio día). Se
+perdía. Ahora la ventana es `(último corte, ahora]`.
+
+- **El corte se toma al armar el reporte, no al enviarlo**, y se guarda en
+  `resumen_envios.corte` (`ALTER TABLE ... ADD COLUMN`; las filas viejas usan su hora de envío).
+  Tomarlo al armar es lo que evita perder lo que llega mientras se envía o si el envío falla.
+- **Si Telegram falla, el corte no avanza**: el siguiente ciclo (60 s) rearma la misma ventana.
+  El día solo se marca cuando salieron todas las partes.
+- **Cada línea trae la hora del depósito**, que es lo que aparece en el estado de cuenta del banco.
+- **Un resumen largo se parte** en varias partes (`partes()`): la coma de 4096 caracteres ya no
+  puede cortar un depósito a la mitad. La cabecera dice `desde … hasta …`.
+- **El envío manual (`POST /api/depositos/enviar`) no mueve el corte**: dispara por fechas y sirve
+  para mirar o reenviar. Un envío manual no evita que el resumen programado repita esos depósitos.
+- **`GET /api/depositos` no cambia**: sigue filtrando por fechas, para consultar cualquier rango.
