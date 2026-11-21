@@ -195,21 +195,38 @@ def _nuevo_folio(con: sqlite3.Connection) -> str:
 _BLOQUEA = "(estado = 'confirmada' OR (estado = 'pendiente' AND vence > ?))"
 
 
-def ocupados(ahora: str | None = None) -> set[str]:
-    """Slots ISO con una cita confirmada o un apartado vigente."""
+def _filtro_agenda(agenda_id: str | None) -> tuple[str, tuple[str, ...]]:
+    """Filtro SQL por agenda. Sin agenda no se filtra; con agenda se ve lo suyo y lo viejo.
+
+    Lo que quedó con `agenda_id=''` (citas anteriores a las agendas) se considera de todas
+    las agendas: si no, al encender el modo multiagenda esos horarios ya vendidos volverían
+    a aparecer libres.
+    """
+    if not agenda_id:
+        return "", ()
+    return " AND (agenda_id = ? OR agenda_id = '')", (agenda_id,)
+
+
+def ocupados(ahora: str | None = None, *, agenda_id: str | None = None) -> set[str]:
+    """Slots ISO con una cita confirmada o un apartado vigente (de esa agenda, si se pide)."""
     init()
+    filtro, extra = _filtro_agenda(agenda_id)
     with _con() as con:
-        filas = con.execute(f"SELECT slot FROM citas WHERE {_BLOQUEA}", (ahora or _ahora(),)).fetchall()
+        filas = con.execute(
+            f"SELECT slot FROM citas WHERE {_BLOQUEA}{filtro}", (ahora or _ahora(), *extra)
+        ).fetchall()
     return {f["slot"] for f in filas}
 
 
-def confirmadas(ahora: str | None = None) -> list[dict[str, Any]]:
+def confirmadas(agenda_id: str | None = None, ahora: str | None = None) -> list[dict[str, Any]]:
     """Citas que ocupan agenda: las confirmadas y los apartados vigentes (lo que consume slots)."""
     init()
+    filtro, extra = _filtro_agenda(agenda_id)
     with _con() as con:
         filas = con.execute(
-            f"SELECT folio, slot, servicio_id, nombre, estado FROM citas WHERE {_BLOQUEA}",
-            (ahora or _ahora(),),
+            f"SELECT folio, slot, servicio_id, nombre, estado, agenda_id, agenda_nombre"
+            f" FROM citas WHERE {_BLOQUEA}{filtro}",
+            (ahora or _ahora(), *extra),
         ).fetchall()
     return [dict(f) for f in filas]
 
@@ -217,9 +234,9 @@ def confirmadas(ahora: str | None = None) -> list[dict[str, Any]]:
 def crear(
     slot: str, servicio_id: str, nombre: str, telefono: str = "", *,
     pendiente_hasta: str | None = None, anticipo: int = 0, aceptado_en: str | None = None,
-    ahora: str | None = None,
+    agenda_id: str = "", agenda_nombre: str = "", ahora: str | None = None,
 ) -> dict[str, Any]:
-    """Crea la cita. Lanza SlotOcupado si el horario ya está tomado.
+    """Crea la cita. Lanza SlotOcupado si el horario ya está tomado *en esa agenda*.
 
     Con `pendiente_hasta` (ISO) queda apartada, esperando el comprobante del anticipo,
     y el horario se libera solo cuando esa hora pasa.
@@ -228,7 +245,9 @@ def crear(
     ahora = ahora or _ahora()
     with _candado, _con() as con:
         choque = con.execute(
-            f"SELECT folio FROM citas WHERE slot = ? AND {_BLOQUEA}", (slot, ahora)
+            f"SELECT folio FROM citas WHERE slot = ? AND {_BLOQUEA}"
+            " AND (agenda_id = ? OR agenda_id = '' OR ? = '')",
+            (slot, ahora, agenda_id, agenda_id),
         ).fetchone()
         if choque:
             raise SlotOcupado(slot)
@@ -236,9 +255,10 @@ def crear(
         estado = "pendiente" if pendiente_hasta else "confirmada"
         con.execute(
             "INSERT INTO citas (folio, slot, servicio_id, nombre, telefono, estado, creada, actualizada,"
-            " anticipo_monto, vence, aceptado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " anticipo_monto, vence, aceptado_en, agenda_id, agenda_nombre)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (folio, slot, servicio_id, nombre, telefono, estado, ahora, ahora,
-             anticipo, pendiente_hasta, aceptado_en),
+             anticipo, pendiente_hasta, aceptado_en, agenda_id, agenda_nombre),
         )
         fila = con.execute("SELECT * FROM citas WHERE folio = ?", (folio,)).fetchone()
     return _fila(fila) or {}
@@ -282,8 +302,9 @@ def reagendar(folio: str, nuevo_slot: str, ahora: str | None = None) -> dict[str
         if not fila or fila["estado"] in ("cancelada", "expirada"):
             raise FolioNoEncontrado(folio)
         choque = con.execute(
-            f"SELECT folio FROM citas WHERE slot = ? AND {_BLOQUEA} AND folio <> ?",
-            (nuevo_slot, ahora, fila["folio"]),
+            f"SELECT folio FROM citas WHERE slot = ? AND {_BLOQUEA} AND folio <> ?"
+            " AND (agenda_id = ? OR agenda_id = '' OR ? = '')",
+            (nuevo_slot, ahora, fila["folio"], fila["agenda_id"], fila["agenda_id"]),
         ).fetchone()
         if choque:
             raise SlotOcupado(nuevo_slot)
@@ -307,8 +328,9 @@ def registrar_comprobante(folio: str, tipo: str, media_id: str, ahora: str | Non
         if fila["estado"] not in ("pendiente", "expirada"):
             raise EstadoInvalido(fila["estado"])
         choque = con.execute(
-            f"SELECT folio FROM citas WHERE slot = ? AND {_BLOQUEA} AND folio <> ?",
-            (fila["slot"], ahora, fila["folio"]),
+            f"SELECT folio FROM citas WHERE slot = ? AND {_BLOQUEA} AND folio <> ?"
+            " AND (agenda_id = ? OR agenda_id = '' OR ? = '')",
+            (fila["slot"], ahora, fila["folio"], fila["agenda_id"], fila["agenda_id"]),
         ).fetchone()
         if choque:
             raise SlotOcupado(fila["slot"])

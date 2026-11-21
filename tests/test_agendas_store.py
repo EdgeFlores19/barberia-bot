@@ -216,3 +216,130 @@ def _columnas(tabla: str) -> list[sqlite3.Row]:
         return con.execute(f"PRAGMA table_info({tabla})").fetchall()
     finally:
         con.close()
+
+
+# ---------- M2: el choque de horario es por agenda ----------
+OTRO = "2026-11-17T11:00"
+
+
+def test_dos_agendas_distintas_pueden_vender_la_misma_hora():
+    a = store.crear(SLOT, "gelish", "Ana", "5214491112233", agenda_id=ANA, agenda_nombre="Ana")
+    b = store.crear(SLOT, "gelish", "Brenda", "5214491112244", agenda_id=BRENDA, agenda_nombre="Brenda")
+
+    assert a["agenda_id"] == ANA and b["agenda_id"] == BRENDA
+    assert store.ocupados(agenda_id=ANA) == {SLOT}
+    assert store.ocupados(agenda_id=BRENDA) == {SLOT}
+
+
+def test_la_misma_agenda_no_puede_vender_dos_veces_la_misma_hora():
+    store.crear(SLOT, "gelish", "Ana", "5214491112233", agenda_id=ANA)
+
+    with pytest.raises(store.SlotOcupado):
+        store.crear(SLOT, "gelish", "Brenda", "5214491112244", agenda_id=ANA)
+
+
+def test_la_agenda_de_la_cita_se_guarda_copiada_no_se_deduce_despues():
+    cita = store.crear(SLOT, "gelish", "Ana", "5214491112233", agenda_id=ANA, agenda_nombre="Ana")
+
+    assert (cita["agenda_id"], cita["agenda_nombre"]) == (ANA, "Ana")
+
+
+def test_reagendar_juzga_el_choque_dentro_de_su_agenda():
+    mia = store.crear(SLOT, "gelish", "Ana", "5214491112233", agenda_id=ANA)
+    store.crear(OTRO, "gelish", "Brenda", "5214491112244", agenda_id=BRENDA)
+
+    movida = store.reagendar(mia["folio"], OTRO, ahora=_iso(T0))
+    assert (movida["slot"], movida["agenda_id"]) == (OTRO, ANA)
+
+    store.crear("2026-11-17T12:00", "gelish", "Otra", "5214491112245", agenda_id=ANA)
+    with pytest.raises(store.SlotOcupado):
+        store.reagendar(mia["folio"], "2026-11-17T12:00", ahora=_iso(T0))
+
+
+def test_un_apartado_bloquea_solo_su_agenda():
+    store.crear(SLOT, "gelish", "Ana", "5214491112233", agenda_id=ANA,
+                pendiente_hasta="2026-11-16T12:00")
+
+    assert store.ocupados(agenda_id=ANA, ahora=_iso()) == {SLOT}
+    assert store.ocupados(agenda_id=BRENDA, ahora=_iso()) == set()
+    store.crear(SLOT, "gelish", "Brenda", "5214491112244", agenda_id=BRENDA)
+
+
+def test_el_comprobante_juzga_el_choque_dentro_de_su_agenda():
+    apartada = store.crear(SLOT, "gelish", "Ana", "5214491112233", agenda_id=ANA,
+                           pendiente_hasta="2026-11-16T23:00")
+    despues = "2026-11-17T09:00"
+    store.crear(SLOT, "gelish", "Brenda", "5214491112244", agenda_id=BRENDA, ahora=despues)
+
+    r = store.registrar_comprobante(apartada["folio"], "image", "m1", ahora=despues)
+
+    assert (r["estado"], r["agenda_id"]) == ("confirmada", ANA)
+
+
+def test_un_comprobante_tardio_no_pisa_a_quien_tomo_el_horario_en_su_agenda():
+    apartada = store.crear(OTRO, "gelish", "Ana", "5214491112233", agenda_id=ANA,
+                           pendiente_hasta="2026-11-16T23:00")
+    despues = "2026-11-17T09:00"
+    store.crear(OTRO, "gelish", "Brenda", "5214491112244", agenda_id=ANA, ahora=despues)
+
+    with pytest.raises(store.SlotOcupado):
+        store.registrar_comprobante(apartada["folio"], "image", "m2", ahora=despues)
+
+
+def test_confirmadas_filtra_por_agenda():
+    store.crear(SLOT, "gelish", "Ana", "5214491112233", agenda_id=ANA)
+    store.crear(OTRO, "gelish", "Brenda", "5214491112244", agenda_id=BRENDA)
+
+    assert [c["slot"] for c in store.confirmadas(agenda_id=ANA)] == [SLOT]
+    assert [c["slot"] for c in store.confirmadas(agenda_id=BRENDA)] == [OTRO]
+    assert len(store.confirmadas()) == 2
+
+
+def test_sin_agenda_todo_se_comporta_como_hoy():
+    store.crear(SLOT, "gelish", "Ana", "5214491112233")
+
+    with pytest.raises(store.SlotOcupado):
+        store.crear(SLOT, "gelish", "Brenda", "5214491112244")
+    with pytest.raises(store.SlotOcupado):
+        store.crear(SLOT, "gelish", "Brenda", "5214491112244", agenda_id=ANA)
+    assert store.ocupados() == {SLOT}
+
+
+def test_una_cita_sin_agenda_ocupa_en_todas_las_agendas():
+    """C1 de la revisión: las citas viejas con agenda_id='' no pueden volver a venderse."""
+    store.crear(SLOT, "gelish", "Ana", "5214491112233")
+
+    assert store.ocupados(agenda_id=ANA) == {SLOT}
+    assert store.ocupados(agenda_id=BRENDA) == {SLOT}
+    assert [c["slot"] for c in store.confirmadas(agenda_id=ANA)] == [SLOT]
+    with pytest.raises(store.SlotOcupado):
+        store.crear(SLOT, "gelish", "Brenda", "5214491112244", agenda_id=BRENDA)
+
+
+def test_una_base_que_ya_existia_gana_las_columnas_de_agenda():
+    """La base de producción ya tiene citas: las columnas nuevas entran con DEFAULT ''. """
+    con = sqlite3.connect(Path(config.DB_FILE))
+    con.executescript(
+        "DROP TABLE citas;"
+        "CREATE TABLE citas (id INTEGER PRIMARY KEY AUTOINCREMENT, folio TEXT NOT NULL UNIQUE,"
+        " slot TEXT NOT NULL, servicio_id TEXT NOT NULL, nombre TEXT NOT NULL,"
+        " telefono TEXT NOT NULL DEFAULT '', estado TEXT NOT NULL DEFAULT 'confirmada'"
+        " CHECK (estado IN ('confirmada', 'cancelada', 'pendiente', 'expirada')),"
+        " creada TEXT NOT NULL, actualizada TEXT NOT NULL, calendar_event_id TEXT,"
+        " anticipo_monto INTEGER NOT NULL DEFAULT 0, vence TEXT, aceptado_en TEXT,"
+        " comprobante_en TEXT, comprobante_tipo TEXT, comprobante_media_id TEXT,"
+        " reagendadas INTEGER NOT NULL DEFAULT 0);"
+        "INSERT INTO citas (folio, slot, servicio_id, nombre, estado, creada, actualizada)"
+        " VALUES ('AMB-AAAA', '2026-11-17T10:00', 'gelish', 'Ana', 'confirmada', 'x', 'x');"
+    )
+    con.commit()
+    con.close()
+    store._inicializada = False
+
+    vieja = store.ocupados(agenda_id=ANA)
+
+    assert vieja == {"2026-11-17T10:00"}
+    con = sqlite3.connect(Path(config.DB_FILE))
+    columnas = {f[1] for f in con.execute("PRAGMA table_info(citas)")}
+    con.close()
+    assert {"agenda_id", "agenda_nombre"} <= columnas
