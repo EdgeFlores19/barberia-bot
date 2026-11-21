@@ -438,7 +438,7 @@ async def _agendar_hasta_confirmar(sid: str, datos: dict, indice: int = 0) -> st
 def test_calendar_corre_en_otro_hilo(datos, monkeypatch):
     hilos = []
 
-    def crear_lento(cita, datos):
+    def crear_lento(cita, datos, calendar_id=None):
         hilos.append(threading.current_thread().name)
         return None
 
@@ -449,7 +449,7 @@ def test_calendar_corre_en_otro_hilo(datos, monkeypatch):
 
 
 def test_un_calendar_lento_no_bloquea_otra_conversacion(datos, monkeypatch):
-    def crear_lento(cita, datos):
+    def crear_lento(cita, datos, calendar_id=None):
         time.sleep(0.3)
         return None
 

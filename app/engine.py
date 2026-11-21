@@ -51,6 +51,8 @@ class Sesion:
     historial: list[dict[str, str]] = field(default_factory=list)
     canal: str = "web"                      # "web" | "wa"
     telefono: str = ""                      # tal como lo manda el canal
+    agenda_id: str = ""                     # clave corta de la agenda elegida ("" = la de siempre)
+    agenda_nombre: str = ""                 # nombre con el que se le presenta a la clienta
     ultima_actividad: datetime = field(default_factory=reloj.ahora)
     handoff_avisado: bool = False           # ya se avisó a la manicurista en este handoff
     sin_avance: int = 0                     # respuestas del LLM que no movieron el paso
@@ -195,7 +197,7 @@ def _nombre_dia(fecha: str) -> str:
 
 def _menu_dias(s: Sesion, datos: dict[str, Any], sid: str, cabecera: str):
     """Paso 1: ¿qué día? Una opción por día con huecos, sin horarios."""
-    fechas = _fechas_con_huecos(slots_disponibles(datos, sid))
+    fechas = _fechas_con_huecos(slots_disponibles(datos, sid, agenda_id=s.agenda_id))
     s.paso = "agendar_dia"
     s.dia_fecha = None
     s.dia_sugerido = None          # va a elegir el día de nuevo: no arrastrar el anterior
@@ -217,7 +219,7 @@ def _opciones_horas(s: Sesion, del_dia: list[str]) -> list[tuple[str, str]]:
 
 def _menu_horas(s: Sesion, datos: dict[str, Any], sid: str, fecha: str, cabecera: str):
     """Paso 2: los horarios del día ya elegido (paginados). Si ese día se llenó, vuelve al paso 1."""
-    del_dia = [i for i in slots_disponibles(datos, sid) if i[:10] == fecha]
+    del_dia = [i for i in slots_disponibles(datos, sid, agenda_id=s.agenda_id) if i[:10] == fecha]
     if not del_dia:
         return _menu_dias(s, datos, sid, "Ese día ya no tiene horarios. ¿Qué otro día te queda bien?")
     ultima = (len(del_dia) - 1) // HORAS_POR_PAGINA
@@ -235,31 +237,62 @@ async def _fijar_slot(s: Sesion, elegido: str, datos: dict[str, Any]):
     return [_t("Apartado. ¿A nombre de quién queda?")], s
 
 
-def _ocupadas() -> list[dict[str, Any]]:
-    """Citas de SQLite más lo que la manicurista anotó a mano en Calendar (solo caché)."""
-    return store.confirmadas() + calendar_sync.bloqueos()
+def _calendario(agenda_id: str) -> str | None:
+    """Calendario de Google de esa agenda; None (el de siempre) si todavía no se sabe.
+
+    Con `""` —una sola agenda, como antes— se devuelve None y todo va a GOOGLE_CALENDAR_ID,
+    así el modo actual no cambia de comportamiento ni necesita migración.
+    """
+    if not agenda_id:
+        return None
+    agenda = store.agenda_por_clave(agenda_id)
+    return (agenda or {}).get("calendar_id") or None
 
 
-async def _sincronizar_calendar(datos: dict[str, Any], forzar: bool = False) -> None:
-    """Relee Calendar si el caché venció (o siempre, con `forzar`). Nunca falla ni bloquea
-    el mensaje por mucho: sin Calendar el bot sigue con lo que hay en SQLite."""
+def _agenda_de(s: Sesion) -> dict[str, Any]:
+    """La agenda elegida en la sesión, tal como está en SQLite; {} en el modo de siempre."""
+    if not s.agenda_id:
+        return {}
+    return store.agenda_por_clave(s.agenda_id) or {}
+
+
+def _ocupadas(agenda_id: str = "") -> list[dict[str, Any]]:
+    """Citas de SQLite de esa agenda más lo anotado a mano en su Calendar (solo caché).
+
+    Sin agenda se ve todo, como siempre: las citas viejas (sin agenda) y el calendario global.
+    """
+    return store.confirmadas(agenda_id or None) + calendar_sync.bloqueos(_calendario(agenda_id))
+
+
+async def _sincronizar_calendar(
+    datos: dict[str, Any], forzar: bool = False, agenda_id: str = ""
+) -> None:
+    """Relee Calendar de esa agenda si su caché venció (o siempre, con `forzar`). Nunca falla
+    ni bloquea el mensaje por mucho: sin Calendar el bot sigue con lo que hay en SQLite."""
+    calendario = _calendario(agenda_id)
     if not calendar_sync.bloqueo_activo():
         return
-    if not forzar and not calendar_sync.bloqueo_vencido():
+    if not forzar and not calendar_sync.bloqueo_vencido(calendario):
         return
     try:
         dias = int(datos["reglas_agenda"].get("dias_adelante", 7))
     except (KeyError, TypeError, ValueError):
         dias = 7
     try:
-        await asyncio.to_thread(calendar_sync.refrescar_bloqueos, reloj.ahora(), dias, forzar)
+        await asyncio.to_thread(
+            calendar_sync.refrescar_bloqueos, reloj.ahora(), dias, forzar, calendario
+        )
     except Exception:  # noqa: BLE001 — último cinturón: nada de Calendar tumba un mensaje
         log.exception("fallo inesperado leyendo Calendar; sigo con lo que hay en SQLite")
 
 
-def _huecos_dia(datos: dict[str, Any], servicio_id: str, dia: int) -> list[str]:
+def _huecos_dia(
+    datos: dict[str, Any], servicio_id: str, dia: int, agenda_id: str = ""
+) -> list[str]:
     """Todos los huecos del próximo `dia` (0=lunes), sin el tope de 24 de la lista corta."""
-    todas = horarios.generar_slots(datos, servicio_id, _ocupadas(), reloj.ahora(), limite=1000)
+    todas = horarios.generar_slots(
+        datos, servicio_id, _ocupadas(agenda_id), reloj.ahora(), limite=1000
+    )
     return [i for i in todas if datetime.fromisoformat(i).weekday() == dia]
 
 
@@ -271,13 +304,17 @@ def slots_disponibles(
     servicio_id: str,
     ahora: datetime | None = None,
     excluir_folio: str | None = None,
+    agenda_id: str = "",
 ) -> list[str]:
-    """Huecos donde cabe el servicio completo, según app/slots.py."""
-    citas = store.confirmadas()
+    """Huecos donde cabe el servicio completo, según app/slots.py.
+
+    `agenda_id` acota a las citas de esa agenda; sin él se ven todas, como antes.
+    """
+    citas = store.confirmadas(agenda_id or None)
     if excluir_folio:
         # Al reagendar, su propio horario no debe bloquearse a sí mismo.
         citas = [c for c in citas if c["folio"] != excluir_folio]
-    citas = citas + calendar_sync.bloqueos()
+    citas = citas + calendar_sync.bloqueos(_calendario(agenda_id))
     # Sin tope práctico: con el límite por defecto (24) solo entraban hoy y mañana y el menú
     # de días nunca mostraba el resto de la ventana. Cada pantalla recorta lo que muestra.
     return horarios.generar_slots(
@@ -593,7 +630,7 @@ async def manejar(
     # ¿Ya estaba en manos de la manicurista antes de este mensaje? Si sí, un handoff que
     # sigue activo es el mismo episodio y no se avisa otra vez; si no, es una petición nueva.
     ya_en_humano = s.handoff and s.paso == "humano"
-    await _sincronizar_calendar(datos)
+    await _sincronizar_calendar(datos, agenda_id=s.agenda_id)
     if media is not None:
         # Foto, captura o PDF: el comprobante del anticipo. No depende del paso de la sesión
         # (que puede haberse reiniciado): se busca el apartado de esa clienta por su teléfono.
@@ -794,7 +831,7 @@ def _agendar_directo(
     s.dia_fecha = None
     s.pagina_horas = 0
     s.paso = "agendar_slot"
-    libres = slots_disponibles(datos, sid)
+    libres = slots_disponibles(datos, sid, agenda_id=s.agenda_id)
     if not libres:
         s.paso = "inicio"
         s.handoff = True
@@ -802,7 +839,7 @@ def _agendar_directo(
     sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0, "minutos": 30}
     if dia is not None:
         s.dia_sugerido = dia
-        del_dia = _huecos_dia(datos, sid, dia)
+        del_dia = _huecos_dia(datos, sid, dia, agenda_id=s.agenda_id)
         if del_dia:
             libres = del_dia
     elegido = _preferir_slot(libres, dia, hora) if hora is not None else None
@@ -824,7 +861,7 @@ def _agendar_directo(
             return _menu_horas(s, datos, sid, primero[:10], f"El {DIAS[dia]} tengo:")
     else:
         d = s.dia_sugerido
-        del_dia = _huecos_dia(datos, sid, d) if d is not None else []
+        del_dia = _huecos_dia(datos, sid, d, agenda_id=s.agenda_id) if d is not None else []
         if del_dia and d is not None:
             return _menu_horas(
                 s, datos, sid, del_dia[0][:10],
@@ -867,14 +904,14 @@ def _paso_servicio(s: Sesion, txt: str, datos: dict[str, Any]):
     s.dia_fecha = None
     s.pagina_horas = 0
     s.paso = "agendar_slot"
-    libres = slots_disponibles(datos, sid)
+    libres = slots_disponibles(datos, sid, agenda_id=s.agenda_id)
     if not libres:
         s.paso = "inicio"
         s.handoff = True
         return [_t("No me quedan huecos en los próximos 7 días. Te paso con la manicurista para ver si abre un espacio.")], s
     sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0, "minutos": 30}
     d = s.dia_sugerido
-    del_dia = _huecos_dia(datos, sid, d) if d is not None else []
+    del_dia = _huecos_dia(datos, sid, d, agenda_id=s.agenda_id) if d is not None else []
     if del_dia and d is not None:
         # Ya había dicho el día antes de elegir el servicio: se salta ese paso.
         return _menu_horas(
@@ -907,7 +944,7 @@ async def _paso_dia(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     """Paso 1 de la cita: elegir el día. Acepta el botón, un número, la etiqueta o el nombre
     del día; si ya trae día y hora, o solo la hora, lo resuelve el paso del horario."""
     sid = s.servicio_id or datos["servicios"][0]["id"]
-    libres = slots_disponibles(datos, sid)
+    libres = slots_disponibles(datos, sid, agenda_id=s.agenda_id)
     if not libres:
         s.paso = "inicio"
         s.handoff = True
@@ -953,7 +990,7 @@ async def _paso_dia(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
 async def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
     """Paso 2 de la cita: elegir el horario del día ya escogido (o de lo que pidió por texto)."""
     sid = s.servicio_id or datos["servicios"][0]["id"]
-    libres = slots_disponibles(datos, sid)
+    libres = slots_disponibles(datos, sid, agenda_id=s.agenda_id)
     t = texto.strip()
     if s.dia_fecha and not any(i[:10] == s.dia_fecha for i in libres):
         s.dia_fecha = None                              # ese día se llenó mientras tanto
@@ -986,7 +1023,7 @@ async def _paso_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
         )
     else:
         dia_pedido = dia if dia is not None else s.dia_sugerido
-        del_dia = _huecos_dia(datos, sid, dia_pedido) if dia_pedido is not None else []
+        del_dia = _huecos_dia(datos, sid, dia_pedido, agenda_id=s.agenda_id) if dia_pedido is not None else []
         base = del_dia or libres
         if del_dia and hora is None:
             visibles = base[:8]
@@ -1058,8 +1095,8 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     sid = s.servicio_id or ""
     slot = s.slot or ""
 
-    await _sincronizar_calendar(datos, forzar=True)   # justo antes de apartar: lo manual de último momento
-    ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(), reloj.ahora())
+    await _sincronizar_calendar(datos, forzar=True, agenda_id=s.agenda_id)   # justo antes de apartar: lo manual de último momento
+    ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(s.agenda_id), reloj.ahora())
     if not ok:
         s.pagina_horas = 0
         return _menu_horas(s, datos, sid, slot[:10], f"Ese horario se acaba de ocupar ({motivo}). Elige otro:")
@@ -1071,12 +1108,16 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
         # En WhatsApp la cita queda ligada al teléfono: sin esto, el candado de folio
         # (`_folio_autorizado`) no deja al propio cliente cancelar ni mover su cita.
         tel = s.telefono if s.canal == "wa" else ""
-        cita = store.crear(slot, sid, nombre, tel)
+        cita = store.crear(slot, sid, nombre, tel, agenda_id=s.agenda_id,
+                           agenda_nombre=(_agenda_de(s).get("nombre") or s.agenda_nombre))
     except store.SlotOcupado:
         s.pagina_horas = 0
         return _menu_horas(s, datos, sid, slot[:10], "Justo alguien más tomó ese horario. Elige otro:")
 
-    event_id = await asyncio.to_thread(calendar_sync.crear, cita, datos)
+    event_id = await asyncio.to_thread(
+        calendar_sync.crear, cita, datos,
+        calendar_id=_calendario(cita.get("agenda_id") or ""),
+    )
     if event_id:
         store.set_evento(cita["folio"], event_id)
 
@@ -1151,8 +1192,8 @@ async def _paso_anticipo_aceptar(s: Sesion, txt: str, datos: dict[str, Any]):
     previo = store.apartado_reciente(s.telefono, gracia_horas=0)
     if previo and previo["estado"] == "pendiente":
         store.cancelar(previo["folio"])
-    await _sincronizar_calendar(datos, forzar=True)
-    ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(), reloj.ahora())
+    await _sincronizar_calendar(datos, forzar=True, agenda_id=s.agenda_id)
+    ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(s.agenda_id), reloj.ahora())
     if not ok:
         s.pagina_horas = 0
         return _menu_horas(s, datos, sid, slot[:10], f"Ese horario se acaba de ocupar ({motivo}). Elige otro:")
@@ -1163,7 +1204,10 @@ async def _paso_anticipo_aceptar(s: Sesion, txt: str, datos: dict[str, Any]):
     vence = (ahora + timedelta(minutes=minutos)).isoformat(timespec="seconds")
     try:
         cita = store.crear(slot, sid, nombre, s.telefono, pendiente_hasta=vence,
-                           anticipo=anticipo.monto_para(c, sv["precio"]), aceptado_en=ahora_iso, ahora=ahora_iso)
+                           anticipo=anticipo.monto_para(c, sv["precio"]), aceptado_en=ahora_iso,
+                           agenda_id=s.agenda_id,
+                           agenda_nombre=(_agenda_de(s).get("nombre") or s.agenda_nombre),
+                           ahora=ahora_iso)
     except store.SlotOcupado:
         s.pagina_horas = 0
         return _menu_horas(s, datos, sid, slot[:10], "Justo alguien más tomó ese horario. Elige otro:")
@@ -1233,7 +1277,7 @@ async def _recibir_media(s: Sesion, media: dict[str, str], datos: dict[str, Any]
 
     tardio = not (cita["estado"] == "pendiente" and cita["vence"] > ahora_iso)
     if tardio:
-        ok, _motivo = horarios.validar(datos, cita["servicio_id"], cita["slot"], _ocupadas(), ahora)
+        ok, _motivo = horarios.validar(datos, cita["servicio_id"], cita["slot"], _ocupadas(cita.get("agenda_id") or ""), ahora)
         if not ok:
             return _comprobante_sin_horario(s, cita, datos)
     try:
@@ -1241,7 +1285,10 @@ async def _recibir_media(s: Sesion, media: dict[str, str], datos: dict[str, Any]
     except (store.SlotOcupado, store.EstadoInvalido):
         return _comprobante_sin_horario(s, cita, datos)
 
-    event_id = await asyncio.to_thread(calendar_sync.crear, cita, datos)
+    event_id = await asyncio.to_thread(
+        calendar_sync.crear, cita, datos,
+        calendar_id=_calendario(cita.get("agenda_id") or ""),
+    )
     if event_id:
         store.set_evento(cita["folio"], event_id)
 
@@ -1363,7 +1410,10 @@ async def _cancelar_folio(s: Sesion, folio: str, datos: dict[str, Any], confirma
                    f"Si urge, marca al {datos['telefono']}.")], s
 
     cita = store.cancelar(folio)
-    await asyncio.to_thread(calendar_sync.borrar, cita.get("calendar_event_id"))
+    await asyncio.to_thread(
+        calendar_sync.borrar, cita.get("calendar_event_id"),
+        calendar_id=_calendario(cita.get("agenda_id") or ""),
+    )
     store.set_evento(cita["folio"], None)
     s.folio = None
     s.paso = "fin"
@@ -1436,7 +1486,8 @@ def _empezar_reagendar(s: Sesion, folio: str, datos: dict[str, Any]):
 
     s.folio = cita["folio"]
     s.servicio_id = cita["servicio_id"]
-    libres = [x for x in slots_disponibles(datos, cita["servicio_id"], excluir_folio=cita["folio"])
+    libres = [x for x in slots_disponibles(datos, cita["servicio_id"], excluir_folio=cita["folio"],
+                                          agenda_id=cita.get("agenda_id") or "")
               if x != cita["slot"]]
     if not libres:
         s.paso = "inicio"
@@ -1457,8 +1508,9 @@ async def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any
         s.paso = "inicio"
         return [_t("Esa cita ya no está activa."), _b("Menú:", MENU)], s
     sid = cita["servicio_id"]
-    await _sincronizar_calendar(datos, forzar=True)   # el nuevo horario se elige aquí
-    libres = [x for x in slots_disponibles(datos, sid, excluir_folio=folio) if x != cita["slot"]]
+    await _sincronizar_calendar(datos, forzar=True, agenda_id=s.agenda_id)   # el nuevo horario se elige aquí
+    libres = [x for x in slots_disponibles(datos, sid, excluir_folio=folio,
+                                              agenda_id=cita.get("agenda_id") or "") if x != cita["slot"]]
 
     if txt in {"menu", "no", "asi", "dejar"}:
         s.paso = "inicio"
@@ -1476,14 +1528,18 @@ async def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any
     try:
         nueva = store.reagendar(folio, elegido)
     except store.SlotOcupado:
-        libres = [x for x in slots_disponibles(datos, sid, excluir_folio=folio) if x != cita["slot"]]
+        libres = [x for x in slots_disponibles(datos, sid, excluir_folio=folio,
+                                              agenda_id=cita.get("agenda_id") or "") if x != cita["slot"]]
         return [_b("Justo se ocupó. Elige otro:",
                    [(i, _etiqueta_slot(i)) for i in libres[:8]])], s
     except store.FolioNoEncontrado:
         s.paso = "inicio"
         return [_t("Esa cita ya no está activa."), _b("Menú:", MENU)], s
 
-    event_id = await asyncio.to_thread(calendar_sync.mover, cita.get("calendar_event_id"), nueva, datos)
+    event_id = await asyncio.to_thread(
+        calendar_sync.mover, cita.get("calendar_event_id"), nueva, datos,
+        calendar_id=_calendario(cita.get("agenda_id") or ""),
+    )
     if event_id and event_id != cita.get("calendar_event_id"):
         store.set_evento(folio, event_id)
 

@@ -50,9 +50,10 @@ def calendario(monkeypatch):
     monkeypatch.setattr(calendar_sync, "_listar_eventos", listar)
     monkeypatch.setattr(calendar_sync, "_mono", lambda: cal.reloj_mono)
     monkeypatch.setattr(calendar_sync.avisos, "notificar_alerta", cal.alertas.append)
-    monkeypatch.setattr(calendar_sync, "crear", lambda cita, d: None)      # sin red
-    monkeypatch.setattr(calendar_sync, "mover", lambda ev, cita, d: ev)
-    monkeypatch.setattr(calendar_sync, "borrar", lambda ev: True)
+    # Los dobles aceptan calendar_id porque con varias agendas el motor lo manda siempre.
+    monkeypatch.setattr(calendar_sync, "crear", lambda cita, d, calendar_id=None: None)  # sin red
+    monkeypatch.setattr(calendar_sync, "mover", lambda ev, cita, d, calendar_id=None: ev)
+    monkeypatch.setattr(calendar_sync, "borrar", lambda ev, calendar_id=None: True)
     calendar_sync.reiniciar_bloqueos()
     yield cal
     calendar_sync.reiniciar_bloqueos()
