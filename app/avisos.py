@@ -39,6 +39,12 @@ def notificar_handoff(sid: str, telefono: str, mensaje: str) -> None:
     _telegram(f"Un cliente pide hablar con una persona.\n{contacto}\nDijo: {mensaje[:200]}")
 
 
+def _con_quien(cita: dict) -> str:
+    """La línea "con quién" solo aparece si la cita tiene agenda (modo de siempre: no)."""
+    nombre = str(cita.get("agenda_nombre") or "").strip()
+    return f"Con: {nombre}\n" if nombre else ""
+
+
 def _contacto(telefono: str) -> str:
     return f"WhatsApp: https://wa.me/{telefono}" if telefono else "Canal: chat web (sin teléfono)"
 
@@ -53,6 +59,7 @@ def notificar_anticipo(*, cita: dict, servicio: str, etiqueta: str, restante: in
     _telegram(
         f"{marca}Comprobante de anticipo recibido.{nota}\n"
         f"Cita: {servicio} · {etiqueta}\n"
+        f"{_con_quien(cita)}"
         f"Clienta: {cita['nombre']} · Folio {cita['folio']}\n"
         f"Anticipo: ${cita['anticipo_monto']:,} · Resta por pagar: ${restante:,}\n"
         f"Concepto esperado: {cita['nombre']} / {cita['folio']}\n"
@@ -73,6 +80,7 @@ def notificar_cancelacion_anticipo(*, cita: dict, servicio: str, etiqueta: str,
     _telegram(
         "❌ Cancelación de una cita con anticipo.\n"
         f"Cita: {servicio} · {etiqueta}\n"
+        f"{_con_quien(cita)}"
         f"Clienta: {cita['nombre']} · Folio {cita['folio']}\n"
         f"{accion}\n{_contacto(telefono)}"
     )

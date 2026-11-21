@@ -220,3 +220,61 @@ def test_sin_telefono_lo_dice_en_vez_de_dejar_el_hueco():
     t = concentrado.texto(_reporte([_cita(telefono="")]))
 
     assert "sin teléfono" in t
+
+
+# ---------- M12 · "con quién" y citas por reasignar ----------
+def test_la_linea_con_quien_sale_solo_si_la_cita_tiene_agenda():
+    con = _reporte([_cita(agenda_nombre="Ana")])
+    sin = _reporte([_cita()])
+
+    assert "Folio AMB-AAAA · con Ana" in con["texto"]
+    assert "con Ana" not in sin["texto"]
+
+
+def test_la_fila_del_concentrado_carga_la_agenda():
+    r = _reporte([_cita(agenda_nombre="Brenda", folio="AMB-BBBB")])
+
+    assert r["filas"][0]["agenda"] == "Brenda"
+
+
+def test_seccion_de_citas_por_reasignar():
+    huerfanas = [
+        {"folio": "AMB-HHH", "slot": "2026-11-17T16:00", "nombre": "Luz", "agenda_nombre": "Ana"},
+        {"folio": "AMB-EEE", "slot": "2026-11-17T10:00", "nombre": "Eva", "agenda_nombre": "Brenda"},
+    ]
+    r = concentrado.reporte(DATOS, [_cita()], desde="2026-11-15", hasta="2026-11-15",
+                            reasignar=huerfanas)
+
+    assert "Citas por reasignar" in r["texto"]
+    assert r["texto"].index("AMB-EEE") < r["texto"].index("AMB-HHH"), "van en orden de fecha"
+    assert "era Brenda" in r["texto"]
+    assert r["reasignar"] == huerfanas
+
+
+def test_sin_huerfanas_no_aparece_la_seccion():
+    r = _reporte([_cita()])
+
+    assert "Citas por reasignar" not in r["texto"]
+    assert "Citas por reasignar" not in concentrado.reporte_ventana(
+        DATOS, [_cita()], despues="2026-11-15T00:00:00", hasta="2026-11-16T00:00:00")["partes"][0]
+
+
+def test_las_huerfanas_salen_aunque_no_haya_depositos():
+    r = concentrado.reporte(DATOS, [], desde="2026-11-15", hasta="2026-11-15",
+                            reasignar=[{"folio": "AMB-HHH", "slot": "2026-11-17T16:00",
+                                        "nombre": "Luz", "agenda_nombre": "Ana"}])
+
+    assert "Sin depósitos" in r["texto"] and "AMB-HHH" in r["texto"]
+
+
+def test_el_reparto_en_varios_mensajes_no_pierde_la_seccion():
+    muchas = [_cita(folio=f"AMB-{i:04d}", comprobante_en="2026-11-15T18:42:05") for i in range(120)]
+    r = concentrado.reporte_ventana(DATOS, muchas, despues="2026-11-15T00:00:00",
+                                    hasta="2026-11-16T00:00:00",
+                                    reasignar=[{"folio": "AMB-HHH", "slot": "2026-11-17T16:00",
+                                                "nombre": "Luz", "agenda_nombre": "Ana"}])
+
+    assert len(r["partes"]) > 1
+    assert sum(p.count("• ") >= 1 for p in r["partes"]) == len(r["partes"])
+    assert any("Citas por reasignar" in p and "AMB-HHH" in p for p in r["partes"])
+    assert all(len(p) <= concentrado.LIMITE_TELEGRAM for p in r["partes"])

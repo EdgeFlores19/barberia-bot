@@ -107,6 +107,7 @@ def _filas(datos: dict[str, Any], citas: list[dict[str, Any]],
             "resta": max(sv["precio"] - monto, 0) if descuenta else sv["precio"],
             "depositado": str(cita.get("comprobante_en")),
             "estado": cita.get("estado"),
+            "agenda": str(cita.get("agenda_nombre") or "").strip(),
             "anulada": cita.get("estado") == "cancelada",
         })
     return sorted(salida, key=lambda f: (f["slot"], str(f["folio"])))
@@ -133,7 +134,8 @@ def filas_ventana(datos: dict[str, Any], citas: list[dict[str, Any]],
 
 # ---------- reporte ----------
 def reporte(datos: dict[str, Any], citas: list[dict[str, Any]], desde: str | None = None,
-            hasta: str | None = None, hoy: date | None = None) -> dict[str, Any]:
+            hasta: str | None = None, hoy: date | None = None,
+            reasignar: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """El concentrado completo: filas, totales y el texto listo para mandar."""
     primero, ultimo = rango(desde, hasta, hoy)
     fs = filas(datos, citas, primero, ultimo)
@@ -144,12 +146,14 @@ def reporte(datos: dict[str, Any], citas: list[dict[str, Any]], desde: str | Non
         "total_anticipo": sum(f["anticipo"] for f in fs),
         "total_resta": sum(f["resta"] for f in fs),
         "filas": fs,
+        "reasignar": list(reasignar or []),
     }
     r["texto"] = texto(r)
     return r
 
 
-def reporte_ventana(datos: dict[str, Any], citas: list[dict[str, Any]], despues: str, hasta: str) -> dict[str, Any]:
+def reporte_ventana(datos: dict[str, Any], citas: list[dict[str, Any]], despues: str, hasta: str,
+                    reasignar: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """El concentrado desde el último corte (`despues`, ISO) hasta `hasta` (ISO).
 
     Devuelve además `partes`: el texto repartido en los mensajes que hagan falta, para que nada
@@ -165,6 +169,7 @@ def reporte_ventana(datos: dict[str, Any], citas: list[dict[str, Any]], despues:
         "total_anticipo": sum(f["anticipo"] for f in fs),
         "total_resta": sum(f["resta"] for f in fs),
         "filas": fs,
+        "reasignar": list(reasignar or []),
     }
     r["texto"] = texto(r)
     r["partes"] = partes(r)
@@ -209,10 +214,29 @@ def _linea(f: dict[str, Any]) -> str:
     deposito = (f"{_fecha_corta(momento.date())} {momento:%H:%M}" if momento and len(f["depositado"]) >= 16
                 else _fecha_corta(date.fromisoformat(f["depositado"][:10])))
     tel = _con_mas(f["telefono"])
+    # "con quién" solo si la cita tiene agenda: en el modo de siempre la línea no aparece.
+    con = f" · con {f['agenda']}" if f.get("agenda") else ""
     return (f"{cabeza}\n"
-            f"  {f['nombre']} · Folio {f['folio']}\n"
+            f"  {f['nombre']} · Folio {f['folio']}{con}\n"
             f"  Anticipo ${f['anticipo']:,} · resta ${f['resta']:,}\n"
             f"  Tel {tel} · depositado {deposito}")
+
+
+def _seccion_reasignar(citas: list[dict[str, Any]]) -> str:
+    """Citas que quedaron sin agenda (calendario borrado o pausado): hay que reubicarlas a mano.
+
+    Va aparte del dinero porque no es un depósito: es trabajo pendiente de la dueña.
+    """
+    if not citas:
+        return ""
+    lineas = ["⚠️ Citas por reasignar (su agenda ya no está):"]
+    for c in sorted(citas, key=lambda x: str(x.get("slot") or "")):
+        slot = str(c.get("slot") or "")
+        cuando = _etiqueta_slot(slot) if slot else "sin fecha"
+        era = str(c.get("agenda_nombre") or "sin agenda")
+        lineas.append(f"• {cuando} · {c.get('nombre') or 'sin nombre'} · "
+                      f"Folio {c.get('folio')} · era {era}")
+    return "\n".join(lineas)
 
 
 def _con_mas(telefono: str) -> str:
@@ -238,6 +262,9 @@ def texto(r: dict[str, Any]) -> str:
     if puestas < r["n"]:
         faltan = r["n"] - puestas
         partes.append(f"… y {faltan} depósito{'s' if faltan != 1 else ''} más (pide el reporte completo).")
+    sec = _seccion_reasignar(r.get("reasignar") or [])
+    if sec and usados + len(sec) + 2 <= LIMITE_TELEGRAM:
+        partes.append(sec)
     return "\n\n".join(partes)
 
 
@@ -251,8 +278,9 @@ def partes(r: dict[str, Any]) -> list[str]:
     Con pocos depósitos es un solo mensaje, idéntico a `texto(r)`.
     """
     cab = _cabecera(r)
+    sec = _seccion_reasignar(r.get("reasignar") or [])
     if not r["filas"]:
-        return [cab]
+        return [f"{cab}\n\n{sec}" if sec else cab]
     grupos: list[list[str]] = [[]]
     usados = len(cab) + _RESERVA_PARTE
     for f in r["filas"]:
@@ -262,6 +290,11 @@ def partes(r: dict[str, Any]) -> list[str]:
             usados = _RESERVA_PARTE
         grupos[-1].append(linea)
         usados += len(linea) + 2
+    if sec:
+        if grupos[-1] and usados + len(sec) + 2 > LIMITE_TELEGRAM:
+            grupos.append([sec])
+        else:
+            grupos[-1].append(sec)
     k = len(grupos)
     if k == 1:
         return ["\n\n".join([cab] + grupos[0])]
