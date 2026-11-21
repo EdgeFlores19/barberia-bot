@@ -316,3 +316,22 @@ def test_sin_prefijo_no_se_llama_a_google(lista_google, bd, monkeypatch):
     assert lista_google.llamadas == 0
     assert store.agendas() == []
 
+
+# ------------------------------------------------------------------ avisos al dueño
+def test_avisa_una_vez_por_cambio_y_no_en_cada_ciclo(lista_google, bd, monkeypatch):
+    avisos: list[str] = []
+    monkeypatch.setattr(calendar_sync.avisos, "notificar_alerta", avisos.append)
+    lista_google.lista = [_cal(f"{PREFIJO}Ana", ANA)]
+
+    calendar_sync.refrescar_agendas()
+    assert len(avisos) == 1 and "nuevas: Ana" in avisos[0]
+
+    # Leer otra vez sin cambios no vuelve a avisar, ni siquiera forzando la lectura.
+    calendar_sync.refrescar_agendas(forzar=True)
+    assert len(avisos) == 1
+
+    lista_google.lista = [_cal(f"{PREFIJO}Ana Ruiz", ANA)]
+    calendar_sync.refrescar_agendas(forzar=True)
+    calendar_sync.refrescar_agendas(forzar=True)
+    assert len(avisos) == 2 and "renombradas: Ana Ruiz" in avisos[1]
+

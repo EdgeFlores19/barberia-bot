@@ -9,10 +9,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 
+import httpx
 import pytest
 
-from app import engine, reloj, store
-from app import calendar_sync
+from app import calendar_sync, config, engine, reloj, store
 
 ANA = "ana@group.calendar.google.com"
 BRENDA = "brenda@group.calendar.google.com"
@@ -120,3 +120,85 @@ def test_los_bloqueos_de_calendar_se_leen_por_agenda(datos, agenda, monkeypatch)
 
     engine.slots_disponibles(datos, "manicura")
     assert pedidos[-1] is None
+
+
+class _Respuesta:
+    status_code = 200
+
+    def __init__(self, cuerpo: dict):
+        self._cuerpo = cuerpo
+
+    def json(self) -> dict:
+        return self._cuerpo
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class _GoogleFalso:
+    """events.list de mentira: un evento manual por calendario, o un fallo de red."""
+
+    def __init__(self, eventos: dict[str, list[dict]], fallar: tuple[str, ...] = ()):
+        self.eventos = eventos
+        self.fallar = set(fallar)
+        self.llamadas: list[str] = []
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        cal = ANA if ANA in url else BRENDA
+        self.llamadas.append(cal)
+        if cal in self.fallar:
+            raise httpx.HTTPError("sin red")
+        return _Respuesta({"items": list(self.eventos.get(cal, []))})
+
+
+def _evento_manual(slot: str) -> dict:
+    """Un evento escrito a mano en el calendario de esa agenda (no lo creó el bot)."""
+    ini = datetime.fromisoformat(slot)
+    return {
+        "description": "cita en el consultorio",
+        "start": {"dateTime": ini.isoformat(timespec="minutes")},
+        "end": {"dateTime": (ini + timedelta(hours=1)).isoformat(timespec="minutes")},
+    }
+
+
+@pytest.fixture()
+def bloqueos(monkeypatch):
+    """Deja el bloqueo por calendario encendido y con Google de mentira."""
+    monkeypatch.setattr(config, "CALENDAR_ID", ANA)
+    monkeypatch.setattr(config, "CALENDAR_BLOQUEO", True)
+    monkeypatch.setattr(config, "CALENDAR_TOKEN_FILE", "{}")
+    monkeypatch.setattr(config, "CALENDAR_BLOQUEO_TTL_S", 60.0)
+    monkeypatch.setattr(config, "CALENDAR_BLOQUEO_REINTENTO_S", 120.0)
+    monkeypatch.setattr(calendar_sync, "_access_token", lambda: "tok")
+    monkeypatch.setattr(calendar_sync, "_mono", lambda: reloj.ahora())
+    monkeypatch.setattr(calendar_sync.avisos, "notificar_alerta", lambda texto: None)
+    calendar_sync.reiniciar_bloqueos()
+    yield
+    calendar_sync.reiniciar_bloqueos()
+
+
+def test_un_evento_manual_solo_bloquea_el_horario_de_su_agenda(datos, agenda, bloqueos, monkeypatch):
+    slot_ana = _primer_slot(datos)
+    google = _GoogleFalso({ANA: [_evento_manual(slot_ana)]})
+    monkeypatch.setattr(calendar_sync.httpx, "get", google.get)
+
+    assert calendar_sync.refrescar_bloqueos(reloj.ahora(), 7, forzar=True, calendar_id=ANA) is True
+    calendar_sync.reiniciar_bloqueos(BRENDA)  # Brenda sigue sin leer nada de Google
+
+    assert slot_ana not in engine.slots_disponibles(datos, "manicura", agenda_id=agenda["ana"])
+    assert slot_ana in engine.slots_disponibles(datos, "manicura", agenda_id=agenda["brenda"])
+
+
+def test_si_el_calendario_de_ana_falla_brenda_sigue_disponible(datos, agenda, bloqueos, monkeypatch):
+    slot = _primer_slot(datos)
+    google = _GoogleFalso({BRENDA: [_evento_manual(slot)]}, fallar=(ANA,))
+    monkeypatch.setattr(calendar_sync.httpx, "get", google.get)
+
+    assert calendar_sync.refrescar_bloqueos(reloj.ahora(), 7, forzar=True, calendar_id=ANA) is False
+    assert calendar_sync.refrescar_bloqueos(reloj.ahora(), 7, forzar=True, calendar_id=BRENDA) is True
+
+    # Ana se queda sin bloqueos (cae a lo que hay en SQLite, que está vacío): no se inventa
+    # un horario ocupado ni se cae el bot.
+    assert slot in engine.slots_disponibles(datos, "manicura", agenda_id=agenda["ana"])
+    # Brenda sí ve su evento manual y no ofrece ese hueco.
+    assert slot not in engine.slots_disponibles(datos, "manicura", agenda_id=agenda["brenda"])
