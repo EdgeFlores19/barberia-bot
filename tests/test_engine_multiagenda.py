@@ -410,3 +410,74 @@ def test_los_nombres_largos_se_recortan_al_mostrar_pero_se_guardan_completos(dat
     assert all(len(f["title"]) <= whatsapp_formato.MAX_TITULO_FILA for f in filas)
     assert filas[0]["title"] != largo
     assert store.agenda_de(ANA)["nombre"] == largo
+
+
+# ---------- M11 · mover y cancelar respetan la agenda de la cita ----------
+def test_mover_ofrece_solo_horarios_de_la_misma_agenda(datos, agenda):
+    slot = _primer_slot(datos)
+    cita = store.crear(slot, "manicura", "Clienta de Ana", agenda_id=agenda["ana"])
+    otro = next(x for x in engine.slots_disponibles(datos, "manicura", agenda_id=agenda["ana"]) if x != slot)
+    store.crear(otro, "manicura", "Otra de Ana", agenda_id=agenda["ana"])
+    assert otro in engine.slots_disponibles(datos, "manicura", agenda_id=agenda["brenda"])
+
+    resp, s = _enviar("s1", f"mover {cita['folio']}", datos)
+    ids = [o["id"] for o in resp[0]["opciones"]]
+
+    assert s.paso == "citas_slot"
+    assert otro not in ids, "ese horario es de Brenda, no de Ana"
+    assert slot not in ids, "el horario actual no se ofrece"
+
+
+def test_mover_no_saca_horarios_libres_de_otra_agenda(datos, agenda):
+    """Ana solo trabaja una hora ese día: Brenda no se la presta."""
+    slot = _primer_slot(datos)
+    cita = store.crear(slot, "manicura", "Clienta de Ana", agenda_id=agenda["ana"])
+    del_dia = [x for x in engine.slots_disponibles(datos, "manicura", agenda_id=agenda["ana"])
+               if x[:10] == slot[:10]]
+    for x in del_dia:
+        if x != slot:
+            store.crear(x, "manicura", "Cupo lleno de Ana", agenda_id=agenda["ana"])
+
+    resp, _ = _enviar("s1", f"mover {cita['folio']}", datos)
+    ids = [o["id"] for o in resp[0]["opciones"]]
+    assert all(i == "menu" or not i.startswith(slot[:10]) for i in ids), \
+        "ese día ya no tiene nada para Ana"
+
+
+def test_mover_con_agenda_dada_de_baja_pasa_a_la_manicurista(datos, agenda):
+    slot = _primer_slot(datos)
+    cita = store.crear(slot, "manicura", "Clienta de Brenda", agenda_id=agenda["brenda"])
+    for _ in range(store.AUSENCIAS_PARA_BAJA):
+        store.agendas_sincronizar([{"calendar_id": ANA, "nombre": "Ana"}])
+    assert store.agenda_por_clave(agenda["brenda"])["activa"] == 0
+
+    resp, s = _enviar("s1", f"mover {cita['folio']}", datos)
+
+    assert s.handoff is True
+    assert s.paso == "humano"
+    assert "reubicarte" in resp[0]["texto"]
+    assert store.obtener(cita["folio"])["slot"] == slot, "no se movió nada"
+
+
+@pytest.mark.parametrize("estado_http", [404, 410])
+def test_cancelar_borra_en_el_calendario_de_la_agenda_y_tolera_que_no_exista(
+    datos, agenda, monkeypatch, estado_http
+):
+    urls: list[str] = []
+
+    class R:
+        status_code = estado_http
+
+    monkeypatch.setattr(calendar_sync, "habilitado", lambda: True)
+    monkeypatch.setattr(calendar_sync, "_cabeceras", lambda: {"Authorization": "Bearer x"})
+    monkeypatch.setattr(httpx, "delete", lambda url, **k: urls.append(url) or R())
+
+    slot = _primer_slot(datos)
+    cita = store.crear(slot, "manicura", "Clienta de Ana", agenda_id=agenda["ana"])
+    store.set_evento(cita["folio"], "ev-ana")
+
+    resp, s = _enviar("s1", f"cancelar {cita['folio']}", datos)
+
+    assert urls and ANA in urls[0] and "ev-ana" in urls[0], "borra en el calendario de Ana"
+    assert store.obtener(cita["folio"])["estado"] == "cancelada"
+    assert "Cancelada" in resp[0]["texto"]

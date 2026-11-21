@@ -1633,6 +1633,15 @@ def _empezar_reagendar(s: Sesion, folio: str, datos: dict[str, Any]):
         s.folio, s.paso = cita["folio"], "comprobante"
         return [_t("Esa cita todavía está apartada: falta el comprobante de tu anticipo. "
                    "Si prefieres otro horario, escribe *cancelar* y agendamos de nuevo.")], s
+    agenda = cita.get("agenda_id") or ""
+    if agenda and not (store.agenda_por_clave(agenda) or {}).get("activa"):
+        # Su agenda ya no está: nadie ve ese calendario, así que moverla desde aquí la
+        # dejaría en el limbo. La reubica la manicurista (entra en "citas por reasignar").
+        s.handoff = True
+        s.paso = "humano"
+        return [_t("La agenda de tu cita ya no está disponible, así que el cambio lo ve "
+                   f"{datos['nombre']} para reubicarte. Ya le pasé tu conversación. "
+                   f"Si urge, marca al {datos['telefono']}.")], s
     if cita.get("anticipo_monto"):
         c = anticipo.cfg(datos)
         horas = anticipo.horas_para(cita["slot"], reloj.ahora())
