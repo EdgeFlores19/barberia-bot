@@ -50,8 +50,15 @@ Es la llave para ver, mover o cancelar la cita: en v1 no hay login.
   bot no bloquean. Si el token expira o la API falla, el bot sigue agendando con lo que hay en
   SQLite, lo anota en el log y avisa una vez por Telegram. `CALENDAR_BLOQUEO=0` apaga solo la
   lectura.
+- **Varias agendas (opcional).** Con `CALENDAR_AGENDAS_PREFIJO` (por ejemplo `Agenda · `) cada
+  persona del equipo tiene su calendario de Google y el bot los descubre por el nombre. La clienta
+  elige con quién o pide «cualquiera», y el reparto se resuelve al crear la cita (menos ocupada ese
+  día, y en empate quien la atendió la última vez). Sin calendarios con el prefijo, todo funciona
+  como antes. Diseño en el [ADR 0010](docs/adr/0010-varias-agendas.md); el alta de un cliente
+  nuevo, en la [guía de varias agendas](docs/alta-cliente-agendas.md).
 
-Fuera de v1 a propósito: pagos, promociones, lealtad, multi-sucursal, multi-estilista,
+Fuera de v1 a propósito: pagos, promociones, lealtad, multi-sucursal, servicios y horarios
+distintos por persona, panel para el equipo, elegir por texto libre («con Ana el viernes»),
 recordatorios salientes 24 h antes y penalizaciones por cancelar.
 
 ## Cómo funciona el cerebro
@@ -98,6 +105,7 @@ app/
   llm.py       matching de FAQ local + capa DeepSeek opcional con fallback y guardia de salida
   slots.py     disponibilidad: horario del negocio, alto del servicio, huecos ocupados
   store.py     citas en SQLite: folio, doble reserva, cancelar y reagendar
+  agendas.py   reparto entre agendas: unión de horarios, candidatas y elección (funciones puras)
   seed.py      citas de ejemplo cuando la agenda arranca vacía
   calendar_sync.py  Google Calendar opcional: espejo de citas y bloqueo de huecos (por REST)
   config.py    configuración por variables de entorno
@@ -151,6 +159,8 @@ Lo que falta para operar de verdad está en los issues del repo.
 | [`0006`](docs/adr/0006-disco-persistente-starter.md) | Plan Starter con disco persistente: reemplaza la decisión del ADR 0002 |
 | [`0007`](docs/adr/0007-calendar-bloquea-huecos.md) | Los eventos manuales de Calendar bloquean huecos: se lee para bloquear, no para autorizar |
 | [`0008`](docs/adr/0008-anticipo-con-comprobante.md) | Anticipo al agendar: apartado, comprobante por WhatsApp y verificación del dueño |
+| [`0009`](docs/adr/0009-concentrado-de-depositos.md) | Concentrado de depósitos: el corte del día para cuadrar a mano |
+| [`0010`](docs/adr/0010-varias-agendas.md) | Varias agendas: una persona por calendario, reparto con «cualquiera» y baja suave |
 
 ## Deploy (Render, plan Starter)
 
@@ -168,6 +178,8 @@ en el repo:
 | `DB_FILE` | `/var/data/ambar.db` (dentro del disco; si se omite, la base se pierde en cada deploy) |
 | `GOOGLE_CALENDAR_ID` | vacío: el token de Calendar es personal y no se publica |
 | `CALENDAR_BLOQUEO` / `CALENDAR_BLOQUEO_TTL_S` / `CALENDAR_BLOQUEO_REINTENTO_S` | `1` / `60` / `120` (solo aplican con Calendar habilitado) |
+| `CALENDAR_AGENDAS_PREFIJO` | vacío (modo de un solo calendario); el alta con equipo usa el prefijo de la [guía](docs/alta-cliente-agendas.md) |
+| `CALENDAR_AGENDAS_TTL_S` | `300` (cada cuánto se vuelve a listar el equipo) |
 
 Qué cambió con el plan Starter y el disco:
 
@@ -198,5 +210,7 @@ Qué cambió con el plan Starter y el disco:
 - **F2 (hecho)**: agenda en SQLite con folio, cancelar/reagendar y sync opcional a Google Calendar.
 - **F3 (hecho)**: repo público, CI, capturas y deploy en Render.
 - **F4 (hecho)**: canal WhatsApp Cloud API sobre el mismo motor, con `/privacidad` y `/terminos`.
-- **F5 (pendiente)**: operar con clientes reales — verificación de negocio y App Review de Meta,
+- **F5 (hecho)**: anticipo con comprobante, concentrado de depósitos y **varias agendas** (una
+  persona por calendario, reparto con «cualquiera», mover/cancelar en la agenda de la cita).
+- **F6 (pendiente)**: operar con clientes reales — verificación de negocio y App Review de Meta,
   disco persistente y `SEED_DEMO=0`.
