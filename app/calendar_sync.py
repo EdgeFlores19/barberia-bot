@@ -57,7 +57,17 @@ def _bloqueo_inicial() -> dict[str, Any]:
     }
 
 
-_BLOQ: dict[str, Any] = _bloqueo_inicial()
+# Un estado de bloqueo por calendario: si una agenda tiene su Calendar caído, las demás
+# siguen leyéndose. La clave "" es el calendario único de siempre (GOOGLE_CALENDAR_ID).
+_BLOQS: dict[str, dict[str, Any]] = {}
+
+
+def _estado_bloq(calendar_id: str | None = None) -> dict[str, Any]:
+    """Estado (y caché) del bloqueo de un calendario, creándolo si es la primera vez."""
+    clave = calendar_id or ""
+    if clave not in _BLOQS:
+        _BLOQS[clave] = _bloqueo_inicial()
+    return _BLOQS[clave]
 
 
 def _anotar(motivo: str) -> None:
@@ -68,8 +78,12 @@ def habilitado() -> bool:
     return bool(config.CALENDAR_ID and config.CALENDAR_TOKEN_FILE)
 
 
-def salud() -> dict[str, Any]:
-    """Estado de la integración para /health. Nunca expone el contenido del token."""
+def salud(agendas: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Estado de la integración para /health. Nunca expone el token ni el id del calendario.
+
+    `agendas` es la lista de agendas configuradas (clave, nombre y calendar_id); se resume
+    cada una por su clave y su nombre, que es lo único que necesita quien mira /health.
+    """
     t = _leer_token()
     if not config.CALENDAR_ID:
         motivo = "falta GOOGLE_CALENDAR_ID"
@@ -84,7 +98,7 @@ def salud() -> dict[str, Any]:
     en_variable = config.CALENDAR_TOKEN_FILE.strip().startswith("{")
     return {
         "habilitado": habilitado(),
-        "calendar_id": config.CALENDAR_ID or "(vacío)",
+        "calendario": "configurado" if config.CALENDAR_ID else "(vacío)",
         # Nunca se imprime el valor de la variable: si trae el JSON, se enmascara.
         "token_file": "(JSON en la variable GOOGLE_TOKEN_JSON)" if en_variable else config.CALENDAR_TOKEN_FILE,
         "token_en_variable": en_variable,
@@ -96,6 +110,14 @@ def salud() -> dict[str, Any]:
         "problema_config": motivo,
         "ultimo_error": _ESTADO["ultimo_error"],
         "bloqueo": _salud_bloqueo(),
+        "agendas": [
+            {
+                "clave": str(a.get("clave", "")),
+                "nombre": str(a.get("nombre", "")),
+                "bloqueo": _salud_bloqueo(a.get("calendar_id") or ""),
+            }
+            for a in (agendas or [])
+        ],
     }
 
 
@@ -182,13 +204,17 @@ def _evento(cita: dict[str, Any], datos: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _url(event_id: str = "") -> str:
-    base = f"https://www.googleapis.com/calendar/v3/calendars/{config.CALENDAR_ID}/events"
+def _url(event_id: str = "", calendar_id: str | None = None) -> str:
+    cal = calendar_id or config.CALENDAR_ID
+    base = f"https://www.googleapis.com/calendar/v3/calendars/{cal}/events"
     return f"{base}/{event_id}" if event_id else base
 
 
-def crear(cita: dict[str, Any], datos: dict[str, Any]) -> str | None:
-    """Crea el evento espejo. Devuelve el id o None si Calendar no está disponible."""
+def crear(cita: dict[str, Any], datos: dict[str, Any], calendar_id: str | None = None) -> str | None:
+    """Crea el evento espejo. Devuelve el id o None si Calendar no está disponible.
+
+    `calendar_id` elige el calendario; sin él se usa GOOGLE_CALENDAR_ID, como siempre.
+    """
     if not habilitado():
         _anotar("Calendar deshabilitado (revisa GOOGLE_CALENDAR_ID / GOOGLE_TOKEN_JSON)")
         return None
@@ -198,7 +224,12 @@ def crear(cita: dict[str, Any], datos: dict[str, Any]) -> str | None:
         return None
     _ESTADO["intentos"] += 1
     try:
-        r = httpx.post(_url(), json=_evento(cita, datos), headers=cab, timeout=config.CALENDAR_TIMEOUT_S)
+        r = httpx.post(
+            _url(calendar_id=calendar_id),
+            json=_evento(cita, datos),
+            headers=cab,
+            timeout=config.CALENDAR_TIMEOUT_S,
+        )
         r.raise_for_status()
         _ESTADO["ok"] += 1
         _anotar("")
@@ -209,7 +240,12 @@ def crear(cita: dict[str, Any], datos: dict[str, Any]) -> str | None:
         return None
 
 
-def mover(event_id: str | None, cita: dict[str, Any], datos: dict[str, Any]) -> str | None:
+def mover(
+    event_id: str | None,
+    cita: dict[str, Any],
+    datos: dict[str, Any],
+    calendar_id: str | None = None,
+) -> str | None:
     """Mueve el evento existente; si ya no existe, lo vuelve a crear."""
     if not habilitado():
         _anotar("Calendar deshabilitado (revisa GOOGLE_CALENDAR_ID / GOOGLE_TOKEN_JSON)")
@@ -219,13 +255,16 @@ def mover(event_id: str | None, cita: dict[str, Any], datos: dict[str, Any]) -> 
         _anotar("sin access token: no se pudo leer el archivo ni refrescar")
         return None
     if not event_id:
-        return crear(cita, datos)
+        return crear(cita, datos, calendar_id)
     try:
         r = httpx.patch(
-            _url(event_id), json=_evento(cita, datos), headers=cab, timeout=config.CALENDAR_TIMEOUT_S
+            _url(event_id, calendar_id),
+            json=_evento(cita, datos),
+            headers=cab,
+            timeout=config.CALENDAR_TIMEOUT_S,
         )
         if r.status_code == 404:
-            return crear(cita, datos)
+            return crear(cita, datos, calendar_id)
         r.raise_for_status()
         return event_id
     except (httpx.HTTPError, ValueError) as e:
@@ -234,7 +273,7 @@ def mover(event_id: str | None, cita: dict[str, Any], datos: dict[str, Any]) -> 
         return event_id
 
 
-def borrar(event_id: str | None) -> bool:
+def borrar(event_id: str | None, calendar_id: str | None = None) -> bool:
     """Borra el evento espejo. 404/410 cuentan como borrado."""
     if not habilitado() or not event_id:
         return False
@@ -242,7 +281,7 @@ def borrar(event_id: str | None) -> bool:
     if not cab:
         return False
     try:
-        r = httpx.delete(_url(event_id), headers=cab, timeout=config.CALENDAR_TIMEOUT_S)
+        r = httpx.delete(_url(event_id, calendar_id), headers=cab, timeout=config.CALENDAR_TIMEOUT_S)
         return r.status_code in (200, 204, 404, 410)
     except httpx.HTTPError as e:
         log.warning("no se borró el evento %s: %s", event_id, e)
@@ -256,32 +295,42 @@ def bloqueo_activo() -> bool:
     return habilitado() and config.CALENDAR_BLOQUEO
 
 
-def reiniciar_bloqueos() -> None:
-    """Vacía el caché y el estado del bloqueo (pruebas)."""
-    _BLOQ.clear()
-    _BLOQ.update(_bloqueo_inicial())
+def reiniciar_bloqueos(calendar_id: str | None = None) -> None:
+    """Vacía el caché y el estado del bloqueo (pruebas).
+
+    Sin argumento vacía todos los calendarios; con `calendar_id`, solo el de esa agenda.
+    """
+    if calendar_id is None:
+        _BLOQS.clear()
+        return
+    _BLOQS.pop(calendar_id or "", None)
 
 
-def bloqueo_vencido() -> bool:
+def bloqueo_vencido(calendar_id: str | None = None) -> bool:
     """¿Toca volver a leer? Solo mira el reloj: no hace red."""
-    ok = _BLOQ["ok_ts"]
+    ok = _estado_bloq(calendar_id)["ok_ts"]
     return ok is None or _mono() - ok >= config.CALENDAR_BLOQUEO_TTL_S
 
 
-def _salud_bloqueo() -> dict[str, Any]:
-    ok = _BLOQ["ok_ts"]
+def _salud_bloqueo(calendar_id: str | None = None) -> dict[str, Any]:
+    estado = _estado_bloq(calendar_id)
+    ok = estado["ok_ts"]
     return {
         "activo": bloqueo_activo(),
-        "intervalos": len(_BLOQ["intervalos"]),
-        "lecturas": _BLOQ["lecturas"],
+        "intervalos": len(estado["intervalos"]),
+        "lecturas": estado["lecturas"],
         "edad_s": None if ok is None else round(_mono() - ok),
-        "caido": _BLOQ["caido"],
-        "ultimo_error": _BLOQ["ultimo_error"],
+        "caido": estado["caido"],
+        "ultimo_error": estado["ultimo_error"],
     }
 
 
-def bloqueos() -> list[dict[str, Any]]:
-    """Lo que hay en el caché como citas ocupadas para app/slots.py. No hace red."""
+def bloqueos(calendar_id: str | None = None) -> list[dict[str, Any]]:
+    """Lo del caché como citas ocupadas para app/slots.py. No hace red.
+
+    Cada agenda ocupa su propio horario: quien llama suma `bloqueos()` de la agenda que
+    esté consultando.
+    """
     if not bloqueo_activo():
         return []
     return [
@@ -291,7 +340,7 @@ def bloqueos() -> list[dict[str, Any]]:
             "estado": "confirmada",
             "bloqueo_externo": True,
         }
-        for ini, fin in _BLOQ["intervalos"]
+        for ini, fin in _estado_bloq(calendar_id)["intervalos"]
     ]
 
 
@@ -327,7 +376,9 @@ def _intervalo_evento(ev: dict[str, Any], tz: ZoneInfo) -> tuple[datetime, datet
     return (ini, fn) if fn > ini else None
 
 
-def _listar_eventos(desde: datetime, hasta: datetime) -> list[dict[str, Any]]:
+def _listar_eventos(
+    desde: datetime, hasta: datetime, calendar_id: str | None = None
+) -> list[dict[str, Any]]:
     """events.list del calendario entre dos horas locales. Sin títulos: no se necesitan."""
     cab = _cabeceras()
     if not cab:
@@ -343,7 +394,12 @@ def _listar_eventos(desde: datetime, hasta: datetime) -> list[dict[str, Any]]:
     }
     eventos: list[dict[str, Any]] = []
     for _ in range(4):                    # tope de páginas: 8 días no llegan ni a una
-        r = httpx.get(_url(), params=params, headers=cab, timeout=config.CALENDAR_TIMEOUT_S)
+        r = httpx.get(
+            _url(calendar_id=calendar_id),
+            params=params,
+            headers=cab,
+            timeout=config.CALENDAR_TIMEOUT_S,
+        )
         r.raise_for_status()
         cuerpo = r.json()
         eventos += cuerpo.get("items", [])
@@ -360,39 +416,52 @@ def _motivo(e: Exception) -> str:
     return type(e).__name__
 
 
-def refrescar_bloqueos(ahora: datetime, dias: int, forzar: bool = False) -> bool:
+def refrescar_bloqueos(
+    ahora: datetime, dias: int, forzar: bool = False, calendar_id: str | None = None
+) -> bool:
     """Relee Calendar y actualiza el caché. Síncrona: se llama con asyncio.to_thread.
 
     `forzar` se salta el TTL (se usa al confirmar una cita), pero no el periodo de
     reintento tras un fallo: con Calendar caído no se espera el timeout en cada mensaje.
+    Cada calendario lleva su propio caché, su propio reintento y su propio aviso, así que
+    una agenda caída no deja sin bloqueos a las demás.
     Devuelve True si el caché quedó vigente.
     """
     if not bloqueo_activo():
         return False
+    estado = _estado_bloq(calendar_id)
     ahora_m = _mono()
-    if _BLOQ["fallo_ts"] is not None and ahora_m - _BLOQ["fallo_ts"] < config.CALENDAR_BLOQUEO_REINTENTO_S:
+    if estado["fallo_ts"] is not None and ahora_m - estado["fallo_ts"] < config.CALENDAR_BLOQUEO_REINTENTO_S:
         return False
-    if not forzar and not bloqueo_vencido():
+    if not forzar and not bloqueo_vencido(calendar_id):
         return True
     tz = ZoneInfo(config.CALENDAR_TZ)
+    desde = ahora
+    hasta = datetime.combine(ahora.date() + timedelta(days=dias + 1), datetime.min.time())
     try:
-        eventos = _listar_eventos(ahora, datetime.combine(ahora.date() + timedelta(days=dias + 1), datetime.min.time()))
+        # Con el calendario único de siempre se llama como antes: las pruebas que sustituyen
+        # _listar_eventos con dos argumentos siguen valiendo.
+        eventos = (
+            _listar_eventos(desde, hasta, calendar_id)
+            if calendar_id
+            else _listar_eventos(desde, hasta)
+        )
         intervalos = [i for i in (_intervalo_evento(e, tz) for e in eventos) if i]
     except (httpx.HTTPError, ValueError, KeyError, _SinAcceso) as e:
-        _BLOQ["fallo_ts"] = ahora_m
-        _BLOQ["caido"] = True
-        _BLOQ["ultimo_error"] = _motivo(e)
-        log.warning("no se pudo leer Calendar (%s); se agenda con lo que hay en SQLite", _BLOQ["ultimo_error"])
-        if not _BLOQ["alertado"]:
-            _BLOQ["alertado"] = True
+        estado["fallo_ts"] = ahora_m
+        estado["caido"] = True
+        estado["ultimo_error"] = _motivo(e)
+        log.warning("no se pudo leer Calendar (%s); se agenda con lo que hay en SQLite", estado["ultimo_error"])
+        if not estado["alertado"]:
+            estado["alertado"] = True
             avisos.notificar_alerta(
                 "No pude leer tu Google Calendar. Mientras tanto el bot no sabe de los eventos "
                 "que anotes a mano y podría ofrecer un horario ocupado. Revisa /health."
             )
         return False
-    _BLOQ.update(intervalos=intervalos, ok_ts=ahora_m, fallo_ts=None, caido=False, ultimo_error="")
-    _BLOQ["lecturas"] += 1
-    if _BLOQ["alertado"]:
-        _BLOQ["alertado"] = False
+    estado.update(intervalos=intervalos, ok_ts=ahora_m, fallo_ts=None, caido=False, ultimo_error="")
+    estado["lecturas"] += 1
+    if estado["alertado"]:
+        estado["alertado"] = False
         avisos.notificar_alerta("Google Calendar volvió a responder: los eventos manuales vuelven a bloquear horarios.")
     return True
