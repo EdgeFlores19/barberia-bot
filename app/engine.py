@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from . import anticipo, avisos, calendar_sync, config, llm, reloj, store
+from . import agendas, anticipo, avisos, calendar_sync, config, llm, reloj, store
 from . import slots as horarios
 from .telefono import t10 as _t10
 
@@ -22,6 +22,9 @@ log = logging.getLogger("ambar.engine")
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+
+# "Cualquiera" en la sesión: la agenda se elige al crear la cita, nunca se guarda así.
+CUALQUIERA = "*"
 
 RE_FOLIO = re.compile(r"\bAMB[-\s]?([0-9A-Z]{4})\b")
 RE_FOLIO_GEN = re.compile(r"\b([A-Z]{3}-[0-9A-Z]{4})\b")
@@ -264,13 +267,16 @@ def _ocupadas(agenda_id: str = "") -> list[dict[str, Any]]:
     return store.confirmadas(agenda_id or None) + calendar_sync.bloqueos(_calendario(agenda_id))
 
 
+def _agendas_activas() -> list[dict[str, Any]]:
+    """Las agendas dadas de alta, en el orden en que se le presentan a la clienta."""
+    return store.agendas(solo_activas=True)
+
+
 def _huecos_dia(
     datos: dict[str, Any], servicio_id: str, dia: int, agenda_id: str = ""
 ) -> list[str]:
     """Todos los huecos del próximo `dia` (0=lunes), sin el tope de 24 de la lista corta."""
-    todas = horarios.generar_slots(
-        datos, servicio_id, _ocupadas(agenda_id), reloj.ahora(), limite=1000
-    )
+    todas = slots_disponibles(datos, servicio_id, agenda_id=agenda_id)
     return [i for i in todas if datetime.fromisoformat(i).weekday() == dia]
 
 
@@ -287,7 +293,16 @@ def slots_disponibles(
     """Huecos donde cabe el servicio completo, según app/slots.py.
 
     `agenda_id` acota a las citas de esa agenda; sin él se ven todas, como antes.
+    El comodín `CUALQUIERA` devuelve la unión de todas las agendas activas.
     """
+    ahora = ahora or reloj.ahora()
+    if agenda_id == CUALQUIERA and not excluir_folio:
+        activas = _agendas_activas()
+        if activas:
+            return agendas.horarios_libres(
+                datos, servicio_id, activas, ahora, limite=_LIMITE_HUECOS
+            )
+        agenda_id = ""                      # sin agendas dadas de alta: la de siempre
     citas = store.confirmadas(agenda_id or None)
     if excluir_folio:
         # Al reagendar, su propio horario no debe bloquearse a sí mismo.
@@ -295,9 +310,98 @@ def slots_disponibles(
     citas = citas + calendar_sync.bloqueos(_calendario(agenda_id))
     # Sin tope práctico: con el límite por defecto (24) solo entraban hoy y mañana y el menú
     # de días nunca mostraba el resto de la ventana. Cada pantalla recorta lo que muestra.
-    return horarios.generar_slots(
-        datos, servicio_id, citas, ahora or reloj.ahora(), limite=_LIMITE_HUECOS
+    return horarios.generar_slots(datos, servicio_id, citas, ahora, limite=_LIMITE_HUECOS)
+
+
+def _candidatas_al_slot(
+    datos: dict[str, Any],
+    servicio_id: str,
+    slot: str,
+    agenda_id: str = "",
+    telefono: str = "",
+) -> list[str]:
+    """Agendas donde ese horario sigue libre, en el orden en que se asignaría.
+
+    Con `"cualquiera"` la cita se decide aquí y no al mostrar horarios: si dos clientas
+    piden lo mismo, la segunda prueba la siguiente candidata antes de rendirse.
+    """
+    activas = _agendas_activas()
+    if agenda_id != CUALQUIERA or not activas:
+        return []
+    por_agenda = agendas.candidatas(
+        datos, servicio_id, activas, reloj.ahora(), limite=_LIMITE_HUECOS
     )
+    citas = store.listar()
+    restantes = dict(por_agenda)
+    orden: list[str] = []
+    while restantes:
+        clave = agendas.elegir(slot, restantes, citas, activas, telefono)
+        if clave is None:
+            break
+        orden.append(clave)
+        restantes.pop(clave, None)
+    return orden
+
+
+def _validar_slot(
+    datos: dict[str, Any], servicio_id: str, slot: str, agenda_id: str = ""
+) -> tuple[bool, str]:
+    """¿Cabe la cita en esa agenda? Con el comodín, basta con que quepa en alguna."""
+    ahora = reloj.ahora()
+    if agenda_id != CUALQUIERA:
+        return horarios.validar(datos, servicio_id, slot, _ocupadas(agenda_id), ahora)
+    activas = _agendas_activas()
+    if not activas:
+        return horarios.validar(datos, servicio_id, slot, _ocupadas(""), ahora)
+    motivo = ""
+    for a in activas:
+        ok, por_que = horarios.validar(
+            datos, servicio_id, slot, _ocupadas(str(a["clave"])), ahora
+        )
+        if ok:
+            return True, ""
+        motivo = motivo or por_que
+    return False, motivo or "ocupado"
+
+
+def _crear_cita(
+    s: Sesion,
+    datos: dict[str, Any],
+    servicio_id: str,
+    slot: str,
+    nombre: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Crea la cita en la agenda de la sesión; con el comodín, la asigna y reintenta.
+
+    `store.crear` valida el choque por agenda dentro de su candado: si la agenda elegida
+    acaba de ocuparse, se prueba la siguiente candidata y solo si no queda ninguna se
+    propaga `SlotOcupado`.
+    """
+    telefono = s.telefono if s.canal == "wa" else ""
+    if s.agenda_id != CUALQUIERA or not _agendas_activas():
+        agenda_id = "" if s.agenda_id == CUALQUIERA else s.agenda_id
+        return store.crear(
+            slot, servicio_id, nombre, telefono, agenda_id=agenda_id,
+            agenda_nombre=(_agenda_de(s).get("nombre") or s.agenda_nombre), **extra,
+        )
+    for clave in _candidatas_al_slot(datos, servicio_id, slot, s.agenda_id, s.telefono):
+        agenda = store.agenda_por_clave(clave) or {}
+        try:
+            return store.crear(
+                slot, servicio_id, nombre, telefono, agenda_id=clave,
+                agenda_nombre=agenda.get("nombre") or "", **extra,
+            )
+        except store.SlotOcupado:
+            continue                        # se llenó entre la lectura y la escritura
+    raise store.SlotOcupado(slot)
+
+
+def _con_quien(cita: dict[str, Any]) -> str:
+    """", con Ana" cuando la cita tiene agenda; nada en el modo de siempre."""
+    nombre = (cita.get("agenda_nombre") or "").strip()
+    return f" con {nombre}" if nombre else ""
+
 
 
 def _etiqueta_slot(iso: str) -> str:
@@ -1072,7 +1176,7 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     sid = s.servicio_id or ""
     slot = s.slot or ""
 
-    ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(s.agenda_id), reloj.ahora())
+    ok, motivo = _validar_slot(datos, sid, slot, s.agenda_id)
     if not ok:
         s.pagina_horas = 0
         return _menu_horas(s, datos, sid, slot[:10], f"Ese horario se acaba de ocupar ({motivo}). Elige otro:")
@@ -1083,9 +1187,7 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     try:
         # En WhatsApp la cita queda ligada al teléfono: sin esto, el candado de folio
         # (`_folio_autorizado`) no deja al propio cliente cancelar ni mover su cita.
-        tel = s.telefono if s.canal == "wa" else ""
-        cita = store.crear(slot, sid, nombre, tel, agenda_id=s.agenda_id,
-                           agenda_nombre=(_agenda_de(s).get("nombre") or s.agenda_nombre))
+        cita = _crear_cita(s, datos, sid, slot, nombre)
     except store.SlotOcupado:
         s.pagina_horas = 0
         return _menu_horas(s, datos, sid, slot[:10], "Justo alguien más tomó ese horario. Elige otro:")
@@ -1106,8 +1208,8 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     s.resuelta = True
     sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0}
     horas = datos["reglas_agenda"]["cancelacion_libre_hasta_horas"]
-    return [_t(f"Listo, {nombre}. Quedas {_etiqueta_slot(cita['slot'])} para {sv['nombre']} "
-               f"(${sv['precio']}). Llega 5 min antes.\n\n"
+    return [_t(f"Listo, {nombre}. Quedas {_etiqueta_slot(cita['slot'])}{_con_quien(cita)} "
+               f"para {sv['nombre']} (${sv['precio']}). Llega 5 min antes.\n\n"
                f"Tu folio es {cita['folio']}. Puedes cancelar o mover sin costo hasta {horas} h antes.\n"
                f"Te esperamos en {datos['direccion']}."),
             _b("¿Algo más?", MENU)], s
@@ -1168,7 +1270,7 @@ async def _paso_anticipo_aceptar(s: Sesion, txt: str, datos: dict[str, Any]):
     previo = store.apartado_reciente(s.telefono, gracia_horas=0)
     if previo and previo["estado"] == "pendiente":
         store.cancelar(previo["folio"])
-    ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(s.agenda_id), reloj.ahora())
+    ok, motivo = _validar_slot(datos, sid, slot, s.agenda_id)
     if not ok:
         s.pagina_horas = 0
         return _menu_horas(s, datos, sid, slot[:10], f"Ese horario se acaba de ocupar ({motivo}). Elige otro:")
@@ -1178,10 +1280,8 @@ async def _paso_anticipo_aceptar(s: Sesion, txt: str, datos: dict[str, Any]):
     minutos = anticipo.apartado_minutos(c, slot, ahora)
     vence = (ahora + timedelta(minutes=minutos)).isoformat(timespec="seconds")
     try:
-        cita = store.crear(slot, sid, nombre, s.telefono, pendiente_hasta=vence,
+        cita = _crear_cita(s, datos, sid, slot, nombre, pendiente_hasta=vence,
                            anticipo=anticipo.monto_para(c, sv["precio"]), aceptado_en=ahora_iso,
-                           agenda_id=s.agenda_id,
-                           agenda_nombre=(_agenda_de(s).get("nombre") or s.agenda_nombre),
                            ahora=ahora_iso)
     except store.SlotOcupado:
         s.pagina_horas = 0
