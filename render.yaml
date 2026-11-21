@@ -52,6 +52,15 @@ services:
       # Google Calendar apagado a propósito: el token es personal.
       - key: GOOGLE_CALENDAR_ID
         value: ""
+      # Varias agendas: con el prefijo puesto, cada calendario del equipo se descubre por
+      # su nombre. Vacío = un solo calendario (el demo). Para encenderlo hacen falta el
+      # prefijo y GOOGLE_TOKEN_JSON (el JSON del token, pegado en la variable).
+      - key: CALENDAR_AGENDAS_PREFIJO
+        value: ""
+      - key: CALENDAR_AGENDAS_TTL_S
+        value: "300"
+      - key: GOOGLE_TOKEN_JSON
+        sync: false
       # ---------- WhatsApp Cloud API (opcional) ----------
       - key: WA_MODO
         value: graph

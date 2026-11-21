@@ -104,14 +104,19 @@ def salud(agendas: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     cada una por su clave y su nombre, que es lo único que necesita quien mira /health.
     """
     t = _leer_token()
-    if not config.CALENDAR_ID:
-        motivo = "falta GOOGLE_CALENDAR_ID"
-    elif not config.CALENDAR_TOKEN_FILE:
+    if not config.CALENDAR_TOKEN_FILE:
         motivo = "falta GOOGLE_TOKEN_JSON"
     elif not t:
         motivo = "el token no se pudo leer (archivo inexistente, sin permisos o JSON inválido)"
     elif not t.get("refresh_token"):
         motivo = "el token no tiene refresh_token"
+    elif not config.CALENDAR_ID and not config.CALENDAR_AGENDAS_PREFIJO:
+        # Sin ID ni prefijo no hay nada que leer: es la config del demo.
+        motivo = "falta GOOGLE_CALENDAR_ID o CALENDAR_AGENDAS_PREFIJO"
+    elif not config.CALENDAR_ID and not _hay_agendas():
+        # Con multiagenda el calendario se descubre: sin filas todavía no es un error de
+        # configuración, pero sí lo más probable si el token no puede listar calendarios.
+        motivo = "el prefijo no encontró agendas activas (¿el token puede listar calendarios?)"
     else:
         motivo = ""
     en_variable = config.CALENDAR_TOKEN_FILE.strip().startswith("{")

@@ -50,3 +50,40 @@ def test_ruta_inexistente_se_reporta(monkeypatch, tmp_path):
     assert salud["token_en_variable"] is False
     assert salud["token_file_existe"] is False
     assert salud["token_legible"] is False
+
+
+# ---------- el estado de /health con multiagenda ----------
+def test_multiagenda_sana_no_reporta_falta_de_calendar_id(monkeypatch):
+    """Con multiagenda el calendar_id se descubre: /health no debe decir que falta."""
+    monkeypatch.setattr(config, "CALENDAR_TOKEN_FILE", json.dumps(TOKEN))
+    monkeypatch.setattr(config, "CALENDAR_ID", "")
+    monkeypatch.setattr(config, "CALENDAR_AGENDAS_PREFIJO", "Agenda - ")
+    monkeypatch.setattr(calendar_sync, "_hay_agendas", lambda: True)
+
+    salud = calendar_sync.salud()
+
+    assert salud["problema_config"] == ""
+    assert salud["habilitado"] is True
+
+
+def test_prefijo_sin_agendas_avisa_del_alcance_del_token(monkeypatch):
+    monkeypatch.setattr(config, "CALENDAR_TOKEN_FILE", json.dumps(TOKEN))
+    monkeypatch.setattr(config, "CALENDAR_ID", "")
+    monkeypatch.setattr(config, "CALENDAR_AGENDAS_PREFIJO", "Agenda - ")
+    monkeypatch.setattr(calendar_sync, "_hay_agendas", lambda: False)
+
+    salud = calendar_sync.salud()
+
+    assert "no encontró agendas" in salud["problema_config"]
+    assert salud["habilitado"] is False
+
+
+def test_sin_id_y_sin_prefijo_lo_dice(monkeypatch):
+    monkeypatch.setattr(config, "CALENDAR_TOKEN_FILE", json.dumps(TOKEN))
+    monkeypatch.setattr(config, "CALENDAR_ID", "")
+    monkeypatch.setattr(config, "CALENDAR_AGENDAS_PREFIJO", "")
+
+    salud = calendar_sync.salud()
+
+    assert "GOOGLE_CALENDAR_ID" in salud["problema_config"]
+    assert "CALENDAR_AGENDAS_PREFIJO" in salud["problema_config"]
