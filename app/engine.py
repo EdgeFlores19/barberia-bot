@@ -56,6 +56,7 @@ class Sesion:
     telefono: str = ""                      # tal como lo manda el canal
     agenda_id: str = ""                     # clave corta de la agenda elegida ("" = la de siempre)
     agenda_nombre: str = ""                 # nombre con el que se le presenta a la clienta
+    hora_sugerida: str | None = None         # hora ya pedida; se conserva al preguntar con quién
     ultima_actividad: datetime = field(default_factory=reloj.ahora)
     handoff_avisado: bool = False           # ya se avisó a la manicurista en este handoff
     sin_avance: int = 0                     # respuestas del LLM que no movieron el paso
@@ -166,6 +167,7 @@ def bienvenida(datos: dict[str, Any]) -> list[dict[str, Any]]:
 # ---------- agendar en dos pasos: primero el día, luego el horario de ese día ----------
 HORAS_POR_PAGINA = 8        # + "más horarios"/"otro día" + "humano" = 10 filas, el tope de WhatsApp
 MAX_DIAS_MENU = 9           # + "humano" = 10 filas
+MAX_AGENDAS_MENU = 9        # + "Cualquiera" = 10 filas, el tope de la lista de WhatsApp
 _DIAS_CORTO = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 _OTRA_FECHA = ("humano", "Otra fecha / hablar con la manicurista")
 
@@ -800,6 +802,8 @@ async def _flujo(
         return await _paso_inicio(s, txt, texto, datos)
     if s.paso == "agendar_servicio":
         return _paso_servicio(s, txt, datos)
+    if s.paso == "agendar_agenda":
+        return _paso_agenda(s, txt, texto, datos)
     if s.paso == "agendar_dia":
         return await _paso_dia(s, txt, texto, datos)
     if s.paso == "agendar_slot":
@@ -911,6 +915,15 @@ def _agendar_directo(
     s.servicio_id = sid
     s.dia_fecha = None
     s.pagina_horas = 0
+    activas = _agendas_activas()
+    if not s.agenda_id and len(activas) > 1:
+        s.dia_sugerido = dia if dia is not None else s.dia_sugerido
+        s.hora_sugerida = hora            # no se pierde lo que ya pidió
+        sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0, "minutos": 30}
+        return _menu_agendas(s, datos, sid, f"{sv['nombre']}. ¿Con quién prefieres?")
+    if not s.agenda_id and activas:
+        a = activas[0]
+        s.agenda_id, s.agenda_nombre = str(a["clave"]), str(a.get("nombre") or "")
     s.paso = "agendar_slot"
     libres = slots_disponibles(datos, sid, agenda_id=s.agenda_id)
     if not libres:
@@ -957,8 +970,67 @@ def _agendar_directo(
                + [_OTRA_FECHA])], s
 
 
+def _opciones_agendas(activas: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """Una fila por agenda —su clave corta, nunca el ID del calendario— más "Cualquiera"."""
+    if len(activas) > MAX_AGENDAS_MENU:
+        log.warning(
+            "multiagenda: %d agendas activas; el menú muestra las %d primeras por orden",
+            len(activas), MAX_AGENDAS_MENU,
+        )
+    filas = [(str(a["clave"]), str(a["nombre"])) for a in activas[:MAX_AGENDAS_MENU]]
+    return filas + [(CUALQUIERA, store.NOMBRE_RESERVADO)]
+
+
+def _menu_agendas(s: Sesion, datos: dict[str, Any], sid: str, cabecera: str):
+    """Pregunta con quién: las agendas activas y "cualquiera"."""
+    s.paso = "agendar_agenda"
+    s.dia_fecha = None
+    s.pagina_horas = 0
+    return [_b(cabecera, _opciones_agendas(_agendas_activas()))], s
+
+
+def _paso_agenda(s: Sesion, txt: str, texto: str, datos: dict[str, Any]):
+    """Elige con quién: por botón/fila, por nombre, por número o "cualquiera"."""
+    sid = s.servicio_id or datos["servicios"][0]["id"]
+    activas = _agendas_activas()
+    sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0, "minutos": 30}
+    t = texto.strip().lower()
+    elegida: str | None = None
+    if not activas:
+        return _seguir_agenda(s, datos, sid)
+    if txt in {"cualquiera", "*", "quien sea", "la que sea", "me da igual", "cualquiera disponible"}:
+        elegida = CUALQUIERA
+    elif txt in {str(a["clave"]) for a in activas}:
+        elegida = txt
+    else:
+        elegida = next((str(a["clave"]) for a in activas if _norm(str(a["nombre"])) == txt), None)
+        if elegida is None and txt.isdigit() and 1 <= int(txt) <= min(len(activas), MAX_AGENDAS_MENU):
+            elegida = str(activas[int(txt) - 1]["clave"])   # el número de la fila que ve
+    if elegida is None:
+        return [_b(f"{sv['nombre']}. ¿Con quién prefieres?", _opciones_agendas(activas))], s
+
+    if elegida == CUALQUIERA:
+        s.agenda_id, s.agenda_nombre = CUALQUIERA, ""
+    else:
+        a = store.agenda_por_clave(elegida) or {}
+        s.agenda_id, s.agenda_nombre = elegida, str(a.get("nombre") or "")
+    return _seguir_agenda(s, datos, sid)
+
+
+def _seguir_agenda(s: Sesion, datos: dict[str, Any], sid: str):
+    """Ya se sabe con quién: si había pedido una hora, se va directo a ese horario."""
+    hora, dia = s.hora_sugerida, s.dia_sugerido
+    s.hora_sugerida = None
+    if hora:
+        return _agendar_directo(s, sid, dia, hora, datos)
+    return _menu_dia_tras_servicio(s, datos, sid)
+
+
+
 def _ofrecer_servicios(s: Sesion, datos: dict[str, Any]):
     s.paso = "agendar_servicio"
+    s.agenda_id, s.agenda_nombre = "", ""    # cita nueva: se vuelve a preguntar con quién
+    s.hora_sugerida = None
     s.dia_fecha = None
     s.pagina_horas = 0
     opts = [(x["id"], f"{x['nombre']} · ${x['precio']}") for x in datos["servicios"]]
@@ -984,6 +1056,21 @@ def _paso_servicio(s: Sesion, txt: str, datos: dict[str, Any]):
     s.servicio_id = sid
     s.dia_fecha = None
     s.pagina_horas = 0
+    sv = _servicio(datos, sid) or {"nombre": sid, "precio": 0, "minutos": 30}
+    activas = _agendas_activas()
+    if not s.agenda_id and len(activas) > 1:
+        return _menu_agendas(
+            s, datos, sid,
+            f"{sv['nombre']} (${sv['precio']}, {sv['minutos']} min).\n¿Con quién prefieres?",
+        )
+    if not s.agenda_id and activas:
+        a = activas[0]                      # una sola agenda activa: no hay nada que preguntar
+        s.agenda_id, s.agenda_nombre = str(a["clave"]), str(a.get("nombre") or "")
+    return _menu_dia_tras_servicio(s, datos, sid)
+
+
+def _menu_dia_tras_servicio(s: Sesion, datos: dict[str, Any], sid: str):
+    """Con el servicio y la agenda ya decididos: pide el día (o el que ya había dicho)."""
     s.paso = "agendar_slot"
     libres = slots_disponibles(datos, sid, agenda_id=s.agenda_id)
     if not libres:

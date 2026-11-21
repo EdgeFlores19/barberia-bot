@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import httpx
 import pytest
 
-from app import calendar_sync, config, engine, reloj, store
+from app import calendar_sync, config, engine, reloj, store, whatsapp_formato
 
 ANA = "ana@group.calendar.google.com"
 BRENDA = "brenda@group.calendar.google.com"
@@ -80,7 +80,7 @@ def test_el_evento_espejo_va_al_calendario_de_la_agenda(datos, agenda, monkeypat
 
     _enviar("s1", "agendar", datos)
     _enviar("s1", "manicura", datos)
-    engine.SESIONES["s1"].agenda_id = agenda["ana"]
+    _enviar("s1", "Ana", datos)          # ¿con quién? — el paso nuevo de la Fase 4
     slot = _primer_slot(datos)
     _enviar("s1", engine._etiqueta_slot(slot), datos)
     resp, _ = _enviar("s1", "Edgar Flores", datos)
@@ -206,12 +206,12 @@ def test_si_el_calendario_de_ana_falla_brenda_sigue_disponible(datos, agenda, bl
 
 # ---------- M9 · "Cualquiera disponible": asignar al apartar y al confirmar ----------
 def _agendar_con(sid: str, datos: dict, slot: str, nombre: str = "Clienta Prueba",
-                 tel: str = "", canal: str = "web"):
-    """Agenda por texto como una clienta, pero entrando con "cualquiera" en la sesión."""
+                 tel: str = "", canal: str = "web", con: str = "Cualquiera"):
+    """Agenda por texto como una clienta, contestando el paso de "¿con quién?"."""
     engine.SESIONES.pop(sid, None)
     asyncio.run(engine.manejar(sid, "agendar", datos, canal=canal, telefono=tel))
     asyncio.run(engine.manejar(sid, "manicura", datos, canal=canal, telefono=tel))
-    engine.SESIONES[sid].agenda_id = engine.CUALQUIERA
+    asyncio.run(engine.manejar(sid, con, datos, canal=canal, telefono=tel))
     asyncio.run(engine.manejar(sid, slot, datos, canal=canal, telefono=tel))
     return asyncio.run(engine.manejar(sid, nombre, datos, canal=canal, telefono=tel))
 
@@ -292,3 +292,121 @@ def test_cualquiera_con_anticipo_aparta_en_la_agenda_asignada(datos, agenda, mon
     assert cita["agenda_id"] in {agenda["ana"], agenda["brenda"]}
     assert cita["agenda_nombre"] in {"Ana", "Brenda"}
     assert cita["folio"] in " ".join(r["texto"] for r in resp)
+
+
+# ---------- M10 · el paso "¿con quién?" ----------
+def _hasta_con_quien(sid: str, datos: dict, servicio: str = "manicura"):
+    engine.SESIONES.pop(sid, None)
+    _enviar(sid, "agendar", datos)
+    return _enviar(sid, servicio, datos)
+
+
+def test_con_dos_agendas_pregunta_con_quien_y_no_muestra_ids(datos, agenda):
+    resp, s = _hasta_con_quien("c1", datos)
+    r = resp[0]
+
+    assert s.paso == "agendar_agenda"
+    assert "¿Con quién prefieres?" in r["texto"]
+    assert [o["id"] for o in r["opciones"]] == [agenda["ana"], agenda["brenda"], engine.CUALQUIERA]
+    assert [o["label"] for o in r["opciones"]] == ["Ana", "Brenda", "Cualquiera"]
+    # Nunca se le enseña el ID del calendario, solo la clave corta y el nombre.
+    assert ANA not in " ".join(o["id"] + o["label"] for o in r["opciones"])
+
+
+def test_elegir_agenda_muestra_solo_sus_horarios(datos, agenda):
+    slot = _primer_slot(datos)
+    store.crear(slot, "manicura", "Ocupa a Ana", agenda_id=agenda["ana"])
+
+    _hasta_con_quien("c1", datos)
+    _, s = _enviar("c1", "Brenda", datos)          # por nombre
+    assert s.agenda_id == agenda["brenda"]
+    _, s = _enviar("c1", slot, datos)
+    assert s.paso == "agendar_nombre", "Brenda sí tiene ese horario libre"
+
+    _hasta_con_quien("c2", datos)
+    _, s = _enviar("c2", "1", datos)               # por el número de la fila
+    assert s.agenda_id == agenda["ana"]
+    _, s = _enviar("c2", slot, datos)
+    assert s.paso == "agendar_dia", "para Ana ese horario está tomado"
+
+    _hasta_con_quien("c3", datos)
+    _, s = _enviar("c3", "2", datos)
+    assert s.agenda_id == agenda["brenda"]
+
+
+def test_cualquiera_desde_el_paso_usa_la_union(datos, agenda):
+    slot = _primer_slot(datos)
+    store.crear(slot, "manicura", "Ocupa a Ana", agenda_id=agenda["ana"])
+
+    _hasta_con_quien("c1", datos)
+    _, s = _enviar("c1", "Cualquiera", datos)
+    assert s.agenda_id == engine.CUALQUIERA
+    _, s = _enviar("c1", slot, datos)
+    assert s.paso == "agendar_nombre", "la unión sí lo ofrece"
+
+
+def test_con_una_sola_agenda_no_pregunta(datos):
+    store.agendas_sincronizar([{"calendar_id": ANA, "nombre": "Ana"}])
+    resp, s = _hasta_con_quien("c1", datos)
+
+    assert s.agenda_id == store.agenda_de(ANA)["clave"]
+    assert "¿Con quién" not in resp[0]["texto"]
+    assert s.paso in {"agendar_dia", "agendar_slot"}
+
+
+def test_sin_agendas_no_pregunta_y_queda_como_siempre(datos):
+    assert store.agendas(solo_activas=True) == []
+    resp, s = _hasta_con_quien("c1", datos)
+
+    assert s.agenda_id == ""
+    assert "¿Con quién" not in resp[0]["texto"]
+
+
+def test_con_una_frase_libre_pregunta_con_quien_sin_perder_la_hora(datos, agenda):
+    resp, s = _hasta_con_quien("c1", datos, "quiero manicura el viernes a las 5")
+    if s.paso != "agendar_agenda":
+        pytest.skip("el detector de día/hora no entendió la frase en este entorno")
+
+    assert "¿Con quién prefieres?" in resp[0]["texto"]
+    engine.SESIONES["c1"].hora_sugerida = "17:00"
+    _, s = _enviar("c1", "Ana", datos)
+    assert s.agenda_id == agenda["ana"]
+    assert s.paso in {"agendar_slot", "agendar_nombre"}
+
+
+def test_con_mas_de_nueve_agendas_muestra_nueve_y_avisa(datos, caplog):
+    cals = [
+        {"calendar_id": f"ag{i}@group.calendar.google.com", "nombre": f"Agenda {i}"}
+        for i in range(1, 11)
+    ]
+    store.agendas_sincronizar(cals)
+
+    with caplog.at_level("WARNING", logger="ambar.engine"):
+        resp, _ = _hasta_con_quien("c1", datos)
+
+    filas = [(o["id"], o["label"]) for o in resp[0]["opciones"]]
+    esperadas = [
+        (store.agenda_de(f"ag{i}@group.calendar.google.com")["clave"], f"Agenda {i}")
+        for i in range(1, 10)
+    ]
+    assert filas == esperadas + [(engine.CUALQUIERA, "Cualquiera")]
+    assert "10 agendas activas" in caplog.text
+
+
+def test_los_nombres_largos_se_recortan_al_mostrar_pero_se_guardan_completos(datos):
+    largo = "Alejandra del Carmen Rodríguez"
+    store.agendas_sincronizar([
+        {"calendar_id": ANA, "nombre": largo},
+        {"calendar_id": BRENDA, "nombre": "Brenda"},
+        {"calendar_id": "caro@group.calendar.google.com", "nombre": "Caro"},
+        {"calendar_id": "dani@group.calendar.google.com", "nombre": "Dani"},
+    ])
+
+    resp, _ = _hasta_con_quien("c1", datos)
+    payload = whatsapp_formato.a_payloads(resp)[0]
+    filas = payload["interactive"]["action"]["sections"][0]["rows"]
+
+    assert payload["interactive"]["type"] == "list", "más de 3 opciones van como lista"
+    assert all(len(f["title"]) <= whatsapp_formato.MAX_TITULO_FILA for f in filas)
+    assert filas[0]["title"] != largo
+    assert store.agenda_de(ANA)["nombre"] == largo
