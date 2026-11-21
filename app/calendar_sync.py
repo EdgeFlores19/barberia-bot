@@ -75,8 +75,26 @@ def _anotar(motivo: str) -> None:
     _ESTADO["ultimo_error"] = motivo[:300]
 
 
+def _hay_agendas() -> bool:
+    """¿Hay alguna agenda activa? Solo mira la tabla: ni red ni reloj."""
+    try:
+        return bool(store.agendas(solo_activas=True))
+    except Exception:
+        return False
+
+
 def habilitado() -> bool:
-    return bool(config.CALENDAR_ID and config.CALENDAR_TOKEN_FILE)
+    """¿Se puede hablar con Google? Hace falta token y algo que leer.
+
+    Con multiagenda el ID del calendario se descubre, así que no está en el entorno: basta
+    con que haya agendas dadas de alta. Se pide el prefijo para no encender el espejo con
+    filas viejas cuando el dueño ya volvió al calendario único.
+    """
+    if not config.CALENDAR_TOKEN_FILE:
+        return False
+    if config.CALENDAR_ID:
+        return True
+    return bool(config.CALENDAR_AGENDAS_PREFIJO) and _hay_agendas()
 
 
 def salud(agendas: list[dict[str, Any]] | None = None) -> dict[str, Any]:
