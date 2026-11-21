@@ -70,6 +70,11 @@ CALENDAR_TIMEOUT_S = float(os.getenv("CALENDAR_TIMEOUT_S", "8"))
 CALENDAR_BLOQUEO = os.getenv("CALENDAR_BLOQUEO", "1").strip() != "0"
 CALENDAR_BLOQUEO_TTL_S = float(os.getenv("CALENDAR_BLOQUEO_TTL_S", "60"))
 CALENDAR_BLOQUEO_REINTENTO_S = float(os.getenv("CALENDAR_BLOQUEO_REINTENTO_S", "120"))
+# Varias agendas (una persona por calendario). Se descubren por el prefijo del nombre:
+# el calendario "Manicura - Ana" se le presenta a la clienta como "Ana". Con el prefijo
+# vacío el bot se queda con el calendario único de siempre (GOOGLE_CALENDAR_ID).
+CALENDAR_AGENDAS_PREFIJO = os.getenv("CALENDAR_AGENDAS_PREFIJO", "").strip()
+CALENDAR_AGENDAS_TTL_S = float(os.getenv("CALENDAR_AGENDAS_TTL_S", "300"))
 
 # Token de administración para GET /api/citas. Vacío = ruta deshabilitada (503).
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()

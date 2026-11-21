@@ -9,7 +9,8 @@ de verdad. Calendar hace dos cosas, y ninguna puede tumbar una reserva:
 Se usa REST directo (httpx) para no arrastrar google-api-python-client.
 
 Variables: GOOGLE_TOKEN_JSON, GOOGLE_CALENDAR_ID, CALENDAR_TZ, CALENDAR_BLOQUEO,
-CALENDAR_BLOQUEO_TTL_S, CALENDAR_BLOQUEO_REINTENTO_S.
+CALENDAR_BLOQUEO_TTL_S, CALENDAR_BLOQUEO_REINTENTO_S, CALENDAR_AGENDAS_PREFIJO,
+CALENDAR_AGENDAS_TTL_S.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from . import avisos, config
+from . import avisos, config, store
 
 log = logging.getLogger("ambar.calendar")
 
@@ -465,3 +466,194 @@ def refrescar_bloqueos(
         estado["alertado"] = False
         avisos.notificar_alerta("Google Calendar volvió a responder: los eventos manuales vuelven a bloquear horarios.")
     return True
+
+# ------------------------------------------------------- agendas (una persona por calendario)
+def _agendas_inicial() -> dict[str, Any]:
+    return {
+        "ok_ts": None,         # monotonic de la última lectura buena de calendarList
+        "fallo_ts": None,      # monotonic del último fallo
+        "degradado": False,    # se leyó mal: la lista de agendas quedó como estaba
+        "alertado": False,
+        "ultimo_error": "",
+        "lecturas": 0,
+        "reporte": {},         # lo último que cambió (altas, renombres, bajas…)
+    }
+
+
+_AGENDAS: dict[str, Any] = _agendas_inicial()
+
+
+def reiniciar_agendas() -> None:
+    """Vacía el estado del descubrimiento de agendas (pruebas)."""
+    _AGENDAS.clear()
+    _AGENDAS.update(_agendas_inicial())
+
+
+def multiagenda() -> bool:
+    """¿Se trabaja con varias agendas? Solo si hay prefijo: sin él, el calendario único."""
+    return bool(config.CALENDAR_AGENDAS_PREFIJO) and habilitado()
+
+
+def agendas_vencidas() -> bool:
+    """¿Toca volver a leer la lista de calendarios? Solo mira el reloj: no hace red."""
+    ok = _AGENDAS["ok_ts"]
+    return ok is None or _mono() - ok >= config.CALENDAR_AGENDAS_TTL_S
+
+
+def salud_agendas() -> dict[str, Any]:
+    """Estado del descubrimiento para /health. Sin ids de calendario ni nombres de personas."""
+    ok = _AGENDAS["ok_ts"]
+    return {
+        "multiagenda": multiagenda(),
+        "prefix_configurado": bool(config.CALENDAR_AGENDAS_PREFIJO),
+        "lecturas": _AGENDAS["lecturas"],
+        "edad_s": None if ok is None else round(_mono() - ok),
+        "degradado": _AGENDAS["degradado"],
+        "ultimo_error": _AGENDAS["ultimo_error"],
+        "cambios": _AGENDAS["reporte"],
+    }
+
+
+def nombre_de_agenda(nombre: str) -> str | None:
+    """Nombre tal como lo ve la clienta, o None si el calendario no es una agenda.
+
+    El nombre de la agenda es lo que sigue al prefijo, sin espacios sobrantes. El prefijo
+    se compara sin distinguir mayúsculas porque lo escribe una persona en Google.
+    """
+    prefijo = config.CALENDAR_AGENDAS_PREFIJO
+    if not prefijo:
+        return None
+    texto = str(nombre or "").strip()
+    if not texto.lower().startswith(prefijo.strip().lower()):
+        return None
+    return texto[len(prefijo.strip()):].strip()
+
+
+def _listar_calendarios() -> list[dict[str, Any]]:
+    """calendarList.list: todos los calendarios del token, con su permiso de escritura."""
+    cab = _cabeceras()
+    if not cab:
+        raise _SinAcceso()
+    params = {"maxResults": "250", "fields": "nextPageToken,items(id,summary,accessRole,deleted)"}
+    salida: list[dict[str, Any]] = []
+    for _ in range(4):
+        r = httpx.get(
+            "https://www.googleapis.com/calendar/v3/users/me/calendarList",
+            params=params,
+            headers=cab,
+            timeout=config.CALENDAR_TIMEOUT_S,
+        )
+        r.raise_for_status()
+        cuerpo = r.json()
+        salida += cuerpo.get("items", [])
+        if not cuerpo.get("nextPageToken"):
+            break
+        params["pageToken"] = cuerpo["nextPageToken"]
+    return salida
+
+
+def agendas_desde_calendarios(calendarios: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Los calendarios que son agendas, con `escritura` en False si el bot no puede anotar.
+
+    Se descartan los borrados y los que no llevan el prefijo. Los de solo lectura se
+    devuelven marcados para que store no los ofrezca y avise al dueño, en vez de
+    esconderlos sin decir nada.
+    """
+    agendas: list[dict[str, Any]] = []
+    for cal in calendarios:
+        if cal.get("deleted"):
+            continue
+        nombre = nombre_de_agenda(cal.get("summary") or "")
+        if nombre is None:
+            continue
+        cid = str(cal.get("id") or "").strip()
+        if not cid:
+            continue
+        agendas.append(
+            {
+                "calendar_id": cid,
+                "nombre": nombre,
+                "escritura": str(cal.get("accessRole") or "") in {"owner", "writer"},
+            }
+        )
+    return agendas
+
+
+def _reporte_vacio() -> dict[str, Any]:
+    """Reporte sin cambios; con `degradado` en True cuando la lectura no sirvió."""
+    return {
+        "altas": [], "renombres": [], "bajas": [], "reactivadas": [],
+        "sin_permiso": [], "degradado": True,
+    }
+
+
+def _texto_cambios(reporte: dict[str, Any]) -> str:
+    """Aviso para el dueño con lo que cambió en Google, en una línea por tipo."""
+    partes: list[str] = []
+    if reporte.get("altas"):
+        partes.append("nuevas: " + ", ".join(a["nombre"] for a in reporte["altas"]))
+    if reporte.get("renombres"):
+        partes.append("renombradas: " + ", ".join(a["nombre"] for a in reporte["renombres"]))
+    if reporte.get("reactivadas"):
+        partes.append("de vuelta: " + ", ".join(a["nombre"] for a in reporte["reactivadas"]))
+    if reporte.get("bajas"):
+        partes.append("fuera: " + ", ".join(a["nombre"] for a in reporte["bajas"]))
+    if reporte.get("sin_permiso"):
+        partes.append("sin permiso de escritura: " + ", ".join(a["nombre"] for a in reporte["sin_permiso"]))
+    if not partes:
+        return ""
+    return "Cambios en las agendas de Google. " + "; ".join(partes) + "."
+
+
+def refrescar_agendas(forzar: bool = False) -> dict[str, Any] | None:
+    """Relee calendarList y alinea la tabla `agendas`. Síncrona: se llama con to_thread.
+
+    Devuelve el reporte de lo que cambió, o None si no hay multiagenda (prefijo vacío).
+    Si la lectura o el guardado fallan, el reporte viene con `degradado` en True.
+    Con la lectura caída o vacía no se da de baja a nadie: se marca `degradado` y se avisa
+    una sola vez, igual que el bloqueo. Avisa al dueño cuando alguien entra, se renombra o
+    sale de la lista, para que el catálogo no cambie sin que se entere.
+    """
+    if not multiagenda():
+        return None
+    ahora_m = _mono()
+    if not forzar and not agendas_vencidas():
+        return _AGENDAS["reporte"] or {}
+    try:
+        calendarios = _listar_calendarios()
+    except (httpx.HTTPError, ValueError, KeyError, _SinAcceso) as e:
+        _AGENDAS.update(
+            fallo_ts=ahora_m,
+            degradado=True,
+            ultimo_error=_motivo(e),
+        )
+        log.warning("no se pudo leer la lista de calendarios (%s); se sigue con las agendas de SQLite", _AGENDAS["ultimo_error"])
+        if not _AGENDAS["alertado"]:
+            _AGENDAS["alertado"] = True
+            avisos.notificar_alerta(
+                "No pude leer la lista de calendarios de Google. Las agendas siguen como estaban; "
+                "si alguien entra o sale del negocio, hay que darla de alta a mano. Revisa /health."
+            )
+        return _reporte_vacio()
+    agendas = agendas_desde_calendarios(calendarios)
+    try:
+        reporte = store.agendas_sincronizar(agendas)
+    except Exception as e:  # noqa: BLE001 — la base no debe tumbar el mensaje del cliente
+        _AGENDAS.update(fallo_ts=ahora_m, degradado=True, ultimo_error=f"SQLite: {type(e).__name__}")
+        log.warning("no se pudieron guardar las agendas (%s)", _AGENDAS["ultimo_error"])
+        return _reporte_vacio()
+    texto = _texto_cambios(reporte)
+    if texto:
+        avisos.notificar_alerta(texto)
+    _AGENDAS.update(
+        ok_ts=ahora_m,
+        fallo_ts=None,
+        degradado=bool(reporte.get("degradado")),
+        ultimo_error="",
+        reporte=reporte,
+    )
+    _AGENDAS["lecturas"] += 1
+    if _AGENDAS["alertado"] and not _AGENDAS["degradado"]:
+        _AGENDAS["alertado"] = False
+        avisos.notificar_alerta("Google volvió a responder la lista de calendarios.")
+    return reporte

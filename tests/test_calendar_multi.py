@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import httpx
 import pytest
 
-from app import calendar_sync, config
+from app import calendar_sync, config, store
 
 ANA = "ana@group.calendar.google.com"
 BRENDA = "brenda@group.calendar.google.com"
@@ -182,3 +182,137 @@ def test_salud_resume_por_agenda_sin_ids(google):
     assert [a["clave"] for a in salud["agendas"]] == ["a1b2c3d4", "e5f6a7b8"]
     assert "a1b2c3d4" in json.dumps(salud)
     assert "@group.calendar.google.com" not in json.dumps(salud)
+
+# ---------------------------------------------------------------- descubrir las agendas
+PREFIJO = "Manicura - "
+
+
+@pytest.fixture()
+def lista_google(monkeypatch):
+    """Google falso para calendarList: qué calendarios hay y si la lectura falla."""
+
+    class Google:
+        def __init__(self) -> None:
+            self.lista: list[dict] = []
+            self.fallar = False
+            self.llamadas = 0
+            self.reloj = 5000.0
+
+    class Respuesta:
+        status_code = 200
+
+        def __init__(self, cuerpo: dict):
+            self._cuerpo = cuerpo
+
+        def json(self) -> dict:
+            return self._cuerpo
+
+        def raise_for_status(self) -> None:
+            return None
+
+    g = Google()
+    monkeypatch.setattr(config, "CALENDAR_ID", ANA)
+    monkeypatch.setattr(config, "CALENDAR_TOKEN_FILE", "{}")
+    monkeypatch.setattr(config, "CALENDAR_AGENDAS_PREFIJO", PREFIJO)
+    monkeypatch.setattr(config, "CALENDAR_AGENDAS_TTL_S", 300.0)
+    monkeypatch.setattr(calendar_sync, "_access_token", lambda: "tok")
+    monkeypatch.setattr(calendar_sync, "_mono", lambda: g.reloj)
+    monkeypatch.setattr(calendar_sync.avisos, "notificar_alerta", lambda texto: None)
+
+    def get(url, params=None, headers=None, timeout=None):
+        g.llamadas += 1
+        if g.fallar:
+            raise httpx.HTTPError("sin red")
+        return Respuesta({"items": list(g.lista)})
+
+    monkeypatch.setattr(calendar_sync.httpx, "get", get)
+    calendar_sync.reiniciar_agendas()
+    yield g
+    calendar_sync.reiniciar_agendas()
+
+
+def _cal(nombre: str, calendar_id: str, permiso: str = "owner") -> dict:
+    return {"id": calendar_id, "summary": nombre, "accessRole": permiso}
+
+
+def test_solo_las_del_prefijo_y_con_permiso_de_escritura(lista_google, bd):
+    lista_google.lista = [
+        _cal(f"{PREFIJO}Ana", ANA),
+        _cal(f"{PREFIJO}Brenda", BRENDA, "reader"),
+        _cal("Personal", "yo@gmail.com"),
+    ]
+
+    reporte = calendar_sync.refrescar_agendas()
+
+    assert [a["nombre"] for a in store.agendas(solo_activas=True)] == ["Ana"]
+    assert [s["nombre"] for s in reporte["sin_permiso"]] == ["Brenda"]
+
+
+def test_el_nombre_va_sin_prefijo_ni_espacios(lista_google, bd):
+    lista_google.lista = [_cal(f"  {PREFIJO}   Brenda  ", BRENDA)]
+
+    calendar_sync.refrescar_agendas()
+
+    assert store.agendas(solo_activas=True)[0]["nombre"] == "Brenda"
+
+
+def test_calendario_nuevo_renombrado_y_ausente(lista_google, bd):
+    lista_google.lista = [_cal(f"{PREFIJO}Ana", ANA), _cal(f"{PREFIJO}Brenda", BRENDA)]
+    calendar_sync.refrescar_agendas()
+
+    # Renombrado en Google: se refleja al siguiente refresco.
+    lista_google.lista = [_cal(f"{PREFIJO}Ana Ruiz", ANA), _cal(f"{PREFIJO}Brenda", BRENDA)]
+    reporte = calendar_sync.refrescar_agendas(forzar=True)
+    assert [r["nombre"] for r in reporte["renombres"]] == ["Ana Ruiz"]
+
+    # Ausente una vez: se queda. Dos veces seguidas: se da de baja.
+    lista_google.lista = [_cal(f"{PREFIJO}Ana Ruiz", ANA)]
+    calendar_sync.refrescar_agendas(forzar=True)
+    assert len(store.agendas(solo_activas=True)) == 2
+    reporte = calendar_sync.refrescar_agendas(forzar=True)
+    assert [b["nombre"] for b in reporte["bajas"]] == ["Brenda"]
+    assert [a["nombre"] for a in store.agendas(solo_activas=True)] == ["Ana Ruiz"]
+
+
+def test_lectura_fallida_no_cambia_nada_y_marca_degradado(lista_google, bd):
+    lista_google.lista = [_cal(f"{PREFIJO}Ana", ANA)]
+    calendar_sync.refrescar_agendas()
+
+    lista_google.fallar = True
+    reporte = calendar_sync.refrescar_agendas(forzar=True)
+
+    assert reporte["degradado"] is True
+    assert calendar_sync.salud_agendas()["degradado"] is True
+    assert [a["nombre"] for a in store.agendas(solo_activas=True)] == ["Ana"]
+
+
+def test_lectura_vacia_con_agendas_previas_no_da_de_baja(lista_google, bd):
+    lista_google.lista = [_cal(f"{PREFIJO}Ana", ANA)]
+    calendar_sync.refrescar_agendas()
+
+    lista_google.lista = []
+    reporte = calendar_sync.refrescar_agendas(forzar=True)
+
+    assert reporte["degradado"] is True
+    assert [a["nombre"] for a in store.agendas(solo_activas=True)] == ["Ana"]
+
+
+def test_el_ttl_evita_leer_en_cada_mensaje(lista_google, bd):
+    lista_google.lista = [_cal(f"{PREFIJO}Ana", ANA)]
+    calendar_sync.refrescar_agendas()
+    calendar_sync.refrescar_agendas()
+
+    assert lista_google.llamadas == 1
+    lista_google.reloj += 301
+    calendar_sync.refrescar_agendas()
+    assert lista_google.llamadas == 2
+
+
+def test_sin_prefijo_no_se_llama_a_google(lista_google, bd, monkeypatch):
+    monkeypatch.setattr(config, "CALENDAR_AGENDAS_PREFIJO", "")
+
+    assert calendar_sync.multiagenda() is False
+    assert calendar_sync.refrescar_agendas() is None
+    assert lista_google.llamadas == 0
+    assert store.agendas() == []
+
