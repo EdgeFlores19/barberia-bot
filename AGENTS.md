@@ -80,5 +80,7 @@ Carpeta `docs/plans/`:
 
 1. `adaptador-whatsapp-meta-v2.md` — plan base (tareas 0 a 23).
 2. `plan-whatsapp-v3-correcciones.md` — **correcciones que mandan sobre v2** y orden de ejecución.
+3. `plan-multiagenda.md` — varias agendas (un calendario por persona, del negocio). Propuesto, sin construir:
+   no empieces una tarea sin que el dueño lo pida.
 
 Si el v2 que tienes a la mano contiene un número de teléfono real, **no lo copies** a ningún archivo del repo.
