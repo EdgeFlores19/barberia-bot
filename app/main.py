@@ -58,7 +58,7 @@ def _concentrado_si_toca() -> None:
     # El corte es el instante en que se ARMA el reporte, no en que termina de salir.
     corte = ahora.isoformat(timespec="seconds")
     r = concentrado.reporte_ventana(DATOS, store.listar(), despues=store.ultimo_corte() or f"{dia}T00:00:00",
-                                    hasta=corte)
+                                    hasta=corte, reasignar=store.citas_huerfanas())
     if avisos.notificar_concentrado_partes(r["partes"], r["n"]):
         store.resumen_marcar(dia, r["n"], corte=corte)       # solo si de verdad salió
     else:
