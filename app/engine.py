@@ -264,28 +264,6 @@ def _ocupadas(agenda_id: str = "") -> list[dict[str, Any]]:
     return store.confirmadas(agenda_id or None) + calendar_sync.bloqueos(_calendario(agenda_id))
 
 
-async def _sincronizar_calendar(
-    datos: dict[str, Any], forzar: bool = False, agenda_id: str = ""
-) -> None:
-    """Relee Calendar de esa agenda si su caché venció (o siempre, con `forzar`). Nunca falla
-    ni bloquea el mensaje por mucho: sin Calendar el bot sigue con lo que hay en SQLite."""
-    calendario = _calendario(agenda_id)
-    if not calendar_sync.bloqueo_activo():
-        return
-    if not forzar and not calendar_sync.bloqueo_vencido(calendario):
-        return
-    try:
-        dias = int(datos["reglas_agenda"].get("dias_adelante", 7))
-    except (KeyError, TypeError, ValueError):
-        dias = 7
-    try:
-        await asyncio.to_thread(
-            calendar_sync.refrescar_bloqueos, reloj.ahora(), dias, forzar, calendario
-        )
-    except Exception:  # noqa: BLE001 — último cinturón: nada de Calendar tumba un mensaje
-        log.exception("fallo inesperado leyendo Calendar; sigo con lo que hay en SQLite")
-
-
 def _huecos_dia(
     datos: dict[str, Any], servicio_id: str, dia: int, agenda_id: str = ""
 ) -> list[str]:
@@ -630,7 +608,6 @@ async def manejar(
     # ¿Ya estaba en manos de la manicurista antes de este mensaje? Si sí, un handoff que
     # sigue activo es el mismo episodio y no se avisa otra vez; si no, es una petición nueva.
     ya_en_humano = s.handoff and s.paso == "humano"
-    await _sincronizar_calendar(datos, agenda_id=s.agenda_id)
     if media is not None:
         # Foto, captura o PDF: el comprobante del anticipo. No depende del paso de la sesión
         # (que puede haberse reiniciado): se busca el apartado de esa clienta por su teléfono.
@@ -1095,7 +1072,6 @@ async def _paso_nombre(s: Sesion, texto: str, datos: dict[str, Any]):
     sid = s.servicio_id or ""
     slot = s.slot or ""
 
-    await _sincronizar_calendar(datos, forzar=True, agenda_id=s.agenda_id)   # justo antes de apartar: lo manual de último momento
     ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(s.agenda_id), reloj.ahora())
     if not ok:
         s.pagina_horas = 0
@@ -1192,7 +1168,6 @@ async def _paso_anticipo_aceptar(s: Sesion, txt: str, datos: dict[str, Any]):
     previo = store.apartado_reciente(s.telefono, gracia_horas=0)
     if previo and previo["estado"] == "pendiente":
         store.cancelar(previo["folio"])
-    await _sincronizar_calendar(datos, forzar=True, agenda_id=s.agenda_id)
     ok, motivo = horarios.validar(datos, sid, slot, _ocupadas(s.agenda_id), reloj.ahora())
     if not ok:
         s.pagina_horas = 0
@@ -1508,7 +1483,6 @@ async def _paso_citas_slot(s: Sesion, txt: str, texto: str, datos: dict[str, Any
         s.paso = "inicio"
         return [_t("Esa cita ya no está activa."), _b("Menú:", MENU)], s
     sid = cita["servicio_id"]
-    await _sincronizar_calendar(datos, forzar=True, agenda_id=s.agenda_id)   # el nuevo horario se elige aquí
     libres = [x for x in slots_disponibles(datos, sid, excluir_folio=folio,
                                               agenda_id=cita.get("agenda_id") or "") if x != cita["slot"]]
 

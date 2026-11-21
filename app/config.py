@@ -75,6 +75,9 @@ CALENDAR_BLOQUEO_REINTENTO_S = float(os.getenv("CALENDAR_BLOQUEO_REINTENTO_S", "
 # vacío el bot se queda con el calendario único de siempre (GOOGLE_CALENDAR_ID).
 CALENDAR_AGENDAS_PREFIJO = os.getenv("CALENDAR_AGENDAS_PREFIJO", "").strip()
 CALENDAR_AGENDAS_TTL_S = float(os.getenv("CALENDAR_AGENDAS_TTL_S", "300"))
+# Cada cuánto late el bucle que mantiene fresco el caché de Calendar (sin bloquear a la
+# clienta). Debe ser menor que CALENDAR_BLOQUEO_TTL_S para que el bloqueo casi nunca esté viejo.
+CALENDAR_CICLO_S = float(os.getenv("CALENDAR_CICLO_S", "30"))
 
 # Token de administración para GET /api/citas. Vacío = ruta deshabilitada (503).
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()

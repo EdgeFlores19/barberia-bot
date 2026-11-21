@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app import calendar_sync, config, engine, reloj
+from app import calendar_bucle, calendar_sync, config, engine, reloj
 from app import slots as horarios
 
 pytestmark = pytest.mark.usefixtures("bd")
@@ -164,12 +164,17 @@ def test_el_espejo_del_bot_usa_la_misma_marca_que_se_ignora(datos):
 
 # ------------------------------------------------------------ al reservar
 def test_un_evento_manual_de_ultimo_momento_frena_la_reserva(datos, calendario):
-    """El cache aún no lo conoce: se revalida al confirmar, que es donde importa."""
+    """La manicurista lo anota a mano y la siguiente pasada del bucle ya lo bloquea.
+
+    El turno de la clienta nunca va a Google (C3): el bucle mantiene el caché fresco y el
+    motor valida contra él, así que aquí se simula esa pasada antes de confirmar.
+    """
     slot = _ultimo_hueco(datos)
     _decir("c1", "agendar", datos)
     _decir("c1", "manicura", datos)            # el menú se calcula con Calendar vacío
     _decir("c1", slot, datos)
     calendario.eventos = [_evento(slot, 60)]   # la manicurista lo anota a mano ahora
+    _refrescar()
 
     respuestas, s = _decir("c1", "Ana", datos)
 
@@ -265,7 +270,7 @@ def test_el_error_expuesto_no_filtra_el_id_del_calendario(calendario):
 def test_sin_calendar_configurado_no_consulta_nada(monkeypatch, datos, calendario):
     monkeypatch.setattr(config, "CALENDAR_ID", "")
 
-    asyncio.run(engine._sincronizar_calendar(datos))
+    calendar_bucle.sincronizar(datos)
 
     assert calendario.llamadas == 0 and calendar_sync.bloqueos() == []
 
@@ -273,7 +278,7 @@ def test_sin_calendar_configurado_no_consulta_nada(monkeypatch, datos, calendari
 def test_se_puede_apagar_el_bloqueo_sin_apagar_el_espejo(monkeypatch, datos, calendario):
     monkeypatch.setattr(config, "CALENDAR_BLOQUEO", False)
 
-    asyncio.run(engine._sincronizar_calendar(datos))
+    calendar_bucle.sincronizar(datos)
 
     assert calendario.llamadas == 0 and calendar_sync.habilitado()
 
@@ -316,6 +321,7 @@ def test_mover_una_cita_revalida_con_calendar_al_elegir_el_horario(datos, calend
     cita = engine.store.crear(viejo, "manicura", "Ana", "")
     _decir("m1", f"mover {cita['folio']}", datos)
     calendario.eventos = [_evento(nuevo, 60)]            # la manicurista lo anota mientras tanto
+    _refrescar()                                         # la siguiente pasada del bucle
 
     respuestas, _ = _decir("m1", nuevo, datos)
 

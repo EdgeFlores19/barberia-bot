@@ -13,8 +13,8 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (acceso, anticipo, avisos, calendar_sync, concentrado, config, engine, reloj,
-               seed, store, whatsapp_webhook)
+from . import (acceso, anticipo, avisos, calendar_bucle, calendar_sync, concentrado, config, engine,
+               reloj, seed, store, whatsapp_webhook)
 
 log = logging.getLogger(__name__)
 
@@ -67,12 +67,15 @@ def _concentrado_si_toca() -> None:
 
 @asynccontextmanager
 async def _vida(_: FastAPI):
-    tarea = asyncio.create_task(_bucle_concentrado()) if config.RESUMEN_AUTO else None
+    tareas = [asyncio.create_task(calendar_bucle.bucle(DATOS))] if calendar_sync.habilitado() else []
+    if config.RESUMEN_AUTO:
+        tareas.append(asyncio.create_task(_bucle_concentrado()))
     try:
         yield
     finally:
-        if tarea is not None:
+        for tarea in tareas:
             tarea.cancel()
+        for tarea in tareas:
             with contextlib.suppress(asyncio.CancelledError):
                 await tarea
 
