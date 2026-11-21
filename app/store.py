@@ -5,6 +5,7 @@ La interfaz pública arranca de la que usaba el store en memoria de F1
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
 import sqlite3
 import threading
@@ -55,7 +56,11 @@ CREATE TABLE IF NOT EXISTS citas (
     comprobante_en       TEXT,
     comprobante_tipo     TEXT,
     comprobante_media_id TEXT,
-    reagendadas          INTEGER NOT NULL DEFAULT 0
+    reagendadas          INTEGER NOT NULL DEFAULT 0,
+    -- Agenda (calendario de Google) donde vive la cita. '' = la agenda única del modo
+    -- de un solo calendario, y también = "ocupa en todas" cuando hay varias agendas.
+    agenda_id            TEXT NOT NULL DEFAULT '',
+    agenda_nombre        TEXT NOT NULL DEFAULT ''
 )
 """
 _INDICES_CITAS = (
@@ -93,6 +98,18 @@ CREATE TABLE IF NOT EXISTS resumen_envios (
     enviado      TEXT NOT NULL,
     total_citas  INTEGER NOT NULL DEFAULT 0,
     corte        TEXT
+);
+
+-- Un renglón por calendario de Google del negocio. El `calendar_id` es la identidad; la
+-- `clave` (8 hex) es lo único que se puede mandar al cliente; el `nombre` es solo etiqueta.
+CREATE TABLE IF NOT EXISTS agendas (
+    calendar_id TEXT PRIMARY KEY,
+    clave       TEXT NOT NULL UNIQUE,
+    nombre      TEXT NOT NULL,
+    orden       INTEGER NOT NULL DEFAULT 0,
+    activa      INTEGER NOT NULL DEFAULT 1,
+    ausencias   INTEGER NOT NULL DEFAULT 0,
+    alta        TEXT NOT NULL
 );
 """
 
@@ -150,6 +167,10 @@ def init() -> None:
             _migrar_citas(con)
             con.executescript(ESQUEMA)
             _agregar_columna(con, "resumen_envios", "corte", "TEXT")
+            # Bases que ya traían la tabla de citas: las columnas nuevas entran con su DEFAULT,
+            # así que las citas viejas quedan con agenda_id='' y lo migrado no se pierde.
+            _agregar_columna(con, "citas", "agenda_id", "TEXT NOT NULL DEFAULT ''")
+            _agregar_columna(con, "citas", "agenda_nombre", "TEXT NOT NULL DEFAULT ''")
         _inicializada = True
 
 
@@ -347,6 +368,131 @@ def listar(solo_confirmadas: bool = False) -> list[dict[str, Any]]:
     sql += " ORDER BY slot"
     with _con() as con:
         return [dict(f) for f in con.execute(sql).fetchall()]
+
+
+# ---------------------------------------------------------------- agendas (varias personas)
+# Nombre que el cliente nunca debe elegir como agenda: es el comodín "cualquiera" de la sesión.
+NOMBRE_RESERVADO = "Cualquiera"
+# Una agenda que falta dos lecturas seguidas se da de baja; con una sola ausencia no se toca
+# (un error pasajero de Google no debe sacar a una persona de la lista).
+AUSENCIAS_PARA_BAJA = 2
+
+
+def _clave_agenda(con: sqlite3.Connection, calendar_id: str) -> str:
+    """Clave corta y estable del calendario: lo único que se puede mandar al cliente."""
+    for largo in (8, 10, 12, 16):
+        clave = hashlib.sha1(calendar_id.encode("utf-8")).hexdigest()[:largo]
+        ocupada = con.execute("SELECT 1 FROM agendas WHERE clave = ?", (clave,)).fetchone()
+        if not ocupada:
+            return clave
+    raise RuntimeError("No se pudo generar una clave de agenda única")
+
+
+def _nombre_agenda(base: str, usados: set[str]) -> str:
+    """Nombre tal cual, con sufijo si se repite o si choca con el nombre reservado."""
+    candidato = base.strip()
+    if not candidato or candidato.lower() == NOMBRE_RESERVADO.lower():
+        candidato = f"{NOMBRE_RESERVADO} (2)" if candidato else "Agenda"
+    final, n = candidato, 2
+    while final.lower() in usados:
+        final = f"{candidato} ({n})"
+        n += 1
+    return final
+
+
+def agendas(solo_activas: bool = False) -> list[dict[str, Any]]:
+    """Agendas dadas de alta, en el orden en que se le presentan a la clienta."""
+    init()
+    sql = "SELECT * FROM agendas"
+    if solo_activas:
+        sql += " WHERE activa = 1"
+    sql += " ORDER BY orden, calendar_id"
+    with _con() as con:
+        return [dict(f) for f in con.execute(sql).fetchall()]
+
+
+def agenda_de(calendar_id: str) -> dict[str, Any] | None:
+    """Agenda por su calendar_id (la identidad). Nunca se busca por nombre."""
+    init()
+    with _con() as con:
+        fila = con.execute(
+            "SELECT * FROM agendas WHERE calendar_id = ?", ((calendar_id or "").strip(),)
+        ).fetchone()
+    return _fila(fila)
+
+
+def agenda_por_clave(clave: str) -> dict[str, Any] | None:
+    """Agenda por la clave corta que viaja en la sesión del cliente."""
+    init()
+    with _con() as con:
+        fila = con.execute(
+            "SELECT * FROM agendas WHERE clave = ?", ((clave or "").strip().lower(),)
+        ).fetchone()
+    return _fila(fila)
+
+
+def agendas_sincronizar(
+    calendarios: list[dict[str, Any]] | None, *, lectura_ok: bool = True, ahora: str | None = None
+) -> dict[str, Any]:
+    """Alinea la tabla `agendas` con la lista de calendarios que devolvió Google.
+
+    `calendarios` son dicts con `calendar_id`, `nombre` y, si se sabe, `escritura`. Si la lectura
+    falló (`lectura_ok=False`) o volvió vacía cuando ya había agendas, NO se da de baja a nadie:
+    se marca `degradado` y se deja todo como estaba. Devuelve el reporte con lo que cambió.
+    """
+    init()
+    ahora = ahora or _ahora()
+    reporte: dict[str, Any] = {
+        "altas": [], "renombres": [], "bajas": [], "reactivadas": [],
+        "sin_permiso": [], "degradado": False,
+    }
+    with _candado, _con() as con:
+        previas = {f["calendar_id"]: dict(f) for f in con.execute("SELECT * FROM agendas").fetchall()}
+        if not lectura_ok or (calendarios is not None and not calendarios and previas):
+            reporte["degradado"] = True
+            return reporte
+        vistos: set[str] = set()
+        usados: set[str] = set()
+        for cal in calendarios or []:
+            cid = (cal.get("calendar_id") or "").strip()
+            if not cid:
+                continue
+            if cal.get("escritura") is False:
+                reporte["sin_permiso"].append({"calendar_id": cid, "nombre": cal.get("nombre") or ""})
+                continue
+            nombre = _nombre_agenda(cal.get("nombre") or "", usados)
+            usados.add(nombre.lower())
+            vistos.add(cid)
+            previa = previas.get(cid)
+            if previa is None:
+                orden = con.execute("SELECT COALESCE(MAX(orden), 0) + 1 FROM agendas").fetchone()[0]
+                con.execute(
+                    "INSERT INTO agendas (calendar_id, clave, nombre, orden, activa, ausencias, alta)"
+                    " VALUES (?, ?, ?, ?, 1, 0, ?)",
+                    (cid, _clave_agenda(con, cid), nombre, orden, ahora),
+                )
+                reporte["altas"].append({"calendar_id": cid, "nombre": nombre})
+                continue
+            if previa["activa"] == 0:
+                reporte["reactivadas"].append({"calendar_id": cid, "nombre": nombre})
+            elif previa["nombre"] != nombre:
+                reporte["renombres"].append({"calendar_id": cid, "nombre": nombre})
+            con.execute(
+                "UPDATE agendas SET nombre = ?, activa = 1, ausencias = 0 WHERE calendar_id = ?",
+                (nombre, cid),
+            )
+        for cid, previa in previas.items():
+            if cid in vistos or previa["activa"] == 0:
+                continue
+            ausencias = previa["ausencias"] + 1
+            activa = 0 if ausencias >= AUSENCIAS_PARA_BAJA else 1
+            con.execute(
+                "UPDATE agendas SET ausencias = ?, activa = ? WHERE calendar_id = ?",
+                (ausencias, activa, cid),
+            )
+            if activa == 0:
+                reporte["bajas"].append({"calendar_id": cid, "nombre": previa["nombre"]})
+    return reporte
 
 
 def reset() -> None:
