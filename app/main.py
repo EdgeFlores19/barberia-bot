@@ -203,6 +203,33 @@ def _exige_admin(x_admin_token: str | None) -> None:
         raise HTTPException(status_code=401, detail="no autorizado")
 
 
+@app.get("/api/agendas")
+def agendas(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")):
+    """Quién tiene agenda y cuántas citas trae cada una. Sin `calendar_id` a propósito.
+
+    La clave corta es la que viaja en la sesión de la clienta; el `calendar_id` es la
+    identidad de Google y no sale del servidor. `huerfanas` son las citas futuras de una
+    agenda dada de baja: hay clientas esperando a alguien que ya no está.
+    """
+    _exige_admin(x_admin_token)
+    futuras: dict[str, int] = {}
+    for c in store.listar():
+        if c.get("slot", "") >= store._ahora() and c.get("estado") in ("confirmada", "pendiente"):
+            futuras[c.get("agenda_id", "")] = futuras.get(c.get("agenda_id", ""), 0) + 1
+    return {
+        "agendas": [
+            {
+                "clave": a["clave"],
+                "nombre": a["nombre"],
+                "activa": bool(a["activa"]),
+                "citas_futuras": futuras.get(a["clave"], 0),
+            }
+            for a in store.agendas()
+        ],
+        "huerfanas": store.citas_huerfanas(),
+    }
+
+
 @app.get("/api/citas")
 def citas(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")):
     _exige_admin(x_admin_token)
@@ -263,4 +290,5 @@ def health():
         "commit": os.getenv("RENDER_GIT_COMMIT", "local")[:7],
         "wa": whatsapp_webhook.salud(),
         "calendar": calendar_sync.salud(),
+        "agendas": {**calendar_sync.salud_agendas(), **store.agendas_resumen()},
     }

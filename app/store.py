@@ -453,6 +453,36 @@ def agenda_por_clave(clave: str) -> dict[str, Any] | None:
     return _fila(fila)
 
 
+def citas_huerfanas(ahora: str | None = None) -> list[dict[str, Any]]:
+    """Citas que todavía se van a atender pero cuya agenda ya está dada de baja.
+
+    Pasa cuando alguien sale del negocio y su calendario desaparece: la clienta tiene
+    su cita, pero nadie la ve en la agenda de quien se queda. Hay que reubicarla a mano.
+    Lo pasado no cuenta: ya se atendió (o ya no se atiende).
+    """
+    init()
+    ahora = ahora or _ahora()
+    with _con() as con:
+        filas = con.execute(
+            "SELECT c.folio, c.slot, c.estado, c.agenda_nombre FROM citas c"
+            f" WHERE c.slot >= ? AND {_BLOQUEA.replace('vence', 'c.vence')}"
+            " AND c.agenda_id <> '' AND NOT EXISTS ("
+            "SELECT 1 FROM agendas a WHERE a.clave = c.agenda_id AND a.activa = 1"
+            ") ORDER BY c.slot",
+            (ahora, ahora),
+        ).fetchall()
+    return [dict(f) for f in filas]
+
+
+def agendas_resumen(ahora: str | None = None) -> dict[str, int]:
+    """Cuántas agendas hay y cuántas citas quedaron huérfanas. Números, no nombres."""
+    init()
+    with _con() as con:
+        total = con.execute("SELECT COUNT(*) FROM agendas").fetchone()[0]
+        activas = con.execute("SELECT COUNT(*) FROM agendas WHERE activa = 1").fetchone()[0]
+    return {"activas": int(activas), "total": int(total), "huerfanas": len(citas_huerfanas(ahora))}
+
+
 def agendas_sincronizar(
     calendarios: list[dict[str, Any]] | None, *, lectura_ok: bool = True, ahora: str | None = None
 ) -> dict[str, Any]:

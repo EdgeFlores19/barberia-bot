@@ -501,8 +501,13 @@ def agendas_vencidas() -> bool:
 
 
 def salud_agendas() -> dict[str, Any]:
-    """Estado del descubrimiento para /health. Sin ids de calendario ni nombres de personas."""
+    """Estado del descubrimiento para /health. Sin ids de calendario ni nombres de personas.
+
+    Los cambios van como conteos (`+2`, `-1`) y no como listas: las listas llevan nombres
+    de personas y `/health` es pública.
+    """
     ok = _AGENDAS["ok_ts"]
+    reporte = _AGENDAS["reporte"] if isinstance(_AGENDAS["reporte"], dict) else {}
     return {
         "multiagenda": multiagenda(),
         "prefix_configurado": bool(config.CALENDAR_AGENDAS_PREFIJO),
@@ -510,7 +515,10 @@ def salud_agendas() -> dict[str, Any]:
         "edad_s": None if ok is None else round(_mono() - ok),
         "degradado": _AGENDAS["degradado"],
         "ultimo_error": _AGENDAS["ultimo_error"],
-        "cambios": _AGENDAS["reporte"],
+        **{
+            clave: len(reporte.get(clave) or [])
+            for clave in ("altas", "renombres", "bajas", "reactivadas", "sin_permiso")
+        },
     }
 
 
