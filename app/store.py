@@ -231,6 +231,19 @@ def confirmadas(agenda_id: str | None = None, ahora: str | None = None) -> list[
     return [dict(f) for f in filas]
 
 
+def vigentes(ahora: str | None = None) -> list[dict[str, Any]]:
+    """Las citas que ocupan agenda (confirmadas y apartados que no vencen), con TODAS sus columnas.
+
+    A diferencia de `confirmadas()` (que devuelve lo mínimo para calcular horarios) trae el teléfono y
+    la agenda: es lo que necesita la asignación de «cualquiera». Las canceladas, las expiradas y los
+    apartados vencidos no cuentan: ya no ocupan a nadie.
+    """
+    init()
+    with _con() as con:
+        filas = con.execute(f"SELECT * FROM citas WHERE {_BLOQUEA}", (ahora or _ahora(),)).fetchall()
+    return [dict(f) for f in filas]
+
+
 def crear(
     slot: str, servicio_id: str, nombre: str, telefono: str = "", *,
     pendiente_hasta: str | None = None, anticipo: int = 0, aceptado_en: str | None = None,

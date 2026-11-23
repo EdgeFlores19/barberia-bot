@@ -114,6 +114,10 @@ def elegir(
 
     orden = {str(a.get("clave")): int(a.get("orden") or 0) for a in agendas}
     clave_de = {str(a.get("calendar_id")): str(a.get("clave")) for a in agendas}
+    # `citas.agenda_id` guarda la CLAVE (así la escribe el motor); se acepta también el id del calendario.
+    clave_de.update({clave: clave for clave in orden})
+    # Lo cancelado o expirado ya no ocupa a nadie: ni pesa como carga ni cuenta como "la última vez".
+    citas = [c for c in citas if c.get("estado") not in ("cancelada", "expirada")]
 
     if telefono:
         previas = [
