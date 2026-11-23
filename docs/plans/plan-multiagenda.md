@@ -343,6 +343,13 @@ En modo multiagenda el ID del calendario **se descubre**, así que la condición
 si no hay token, `/health` lo dice. Además `salud()` deja de publicar `"calendar_id"` (`app/calendar_sync.py:87`)
 en cuanto el modo multiagenda está activo: el principio 4 también aplica a `/health`. M3 incluye las dos pruebas.
 
+> **Corrección posterior (descubierta al revisar la implementación).** La condición de C2 vale para el **espejo y los
+> bloqueos** (`habilitado()`), pero **no** para el **descubrimiento**: en el primer arranque la tabla `agendas` está
+> vacía y es la primera lectura de Google la que la llena. Si el descubrimiento (o el arranque del bucle de C3) también
+> exigiera "agendas activas", jamás se leería ninguna. Por eso el descubrimiento depende solo de **prefijo + token**
+> (`calendar_sync.multiagenda()`), y el arranque de la app y cada pasada del bucle usan
+> `calendar_sync.necesita_bucle()` (= `habilitado() or multiagenda()`). Prueba que lo fija: `tests/test_agendas_arranque.py`.
+
 **C3 · Las lecturas de Google salen del camino del mensaje (decidido: bucle de fondo).**
 Hoy `engine._sincronizar_calendar()` (`app/engine.py:243-258`) refresca con un `asyncio.to_thread` por mensaje; con
 caché por calendario serían N calendarios × `CALENDAR_TIMEOUT_S=8` **antes de contestarle a la clienta**. Por eso:

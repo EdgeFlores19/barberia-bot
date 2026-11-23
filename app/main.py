@@ -67,7 +67,9 @@ def _concentrado_si_toca() -> None:
 
 @asynccontextmanager
 async def _vida(_: FastAPI):
-    tareas = [asyncio.create_task(calendar_bucle.bucle(DATOS))] if calendar_sync.habilitado() else []
+    # `necesita_bucle`, no `habilitado`: con multiagenda la tabla de agendas empieza vacía y el
+    # bucle es quien la llena; si solo arrancara con agendas ya dadas de alta, nunca arrancaría.
+    tareas = [asyncio.create_task(calendar_bucle.bucle(DATOS))] if calendar_sync.necesita_bucle() else []
     if config.RESUMEN_AUTO:
         tareas.append(asyncio.create_task(_bucle_concentrado()))
     try:

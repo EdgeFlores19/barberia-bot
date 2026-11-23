@@ -90,8 +90,9 @@ CALENDAR_AGENDAS_PREFIJO=Agenda ·
 CALENDAR_AGENDAS_TTL_S=300
 ```
 
-Y el token como siempre (`GOOGLE_TOKEN_JSON`). `GOOGLE_CALENDAR_ID` deja de importar cuando hay
-agendas: las citas van al calendario de la agenda elegida.
+Y el token como siempre (`GOOGLE_TOKEN_JSON`). **No hace falta `GOOGLE_CALENDAR_ID`**: déjalo vacío. Con el
+prefijo y el token, el bot descubre las agendas solo, en los primeros ~30 segundos tras arrancar, y las citas van
+al calendario de la agenda elegida. Si ya había un `GOOGLE_CALENDAR_ID` de antes, con el prefijo puesto se ignora.
 
 Comprobación rápida: `GET /health` debe reportar las agendas activas y ninguna huérfana; si el
 listado falla, se conserva la última lista buena y se avisa una vez por Telegram.

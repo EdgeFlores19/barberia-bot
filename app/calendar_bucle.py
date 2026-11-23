@@ -46,7 +46,7 @@ def sincronizar(datos: dict[str, Any]) -> None:
     No fuerza nada: `refrescar_bloqueos` respeta el TTL de cada calendario y su periodo de
     reintento tras un fallo, así que llamar a esto cada 30 s no multiplica las lecturas.
     """
-    if not calendar_sync.habilitado():
+    if not calendar_sync.necesita_bucle():
         return
     try:
         # Las agendas nuevas del grupo tienen que existir antes de pedir sus bloqueos.

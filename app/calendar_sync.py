@@ -513,8 +513,22 @@ def reiniciar_agendas() -> None:
 
 
 def multiagenda() -> bool:
-    """¿Se trabaja con varias agendas? Solo si hay prefijo: sin él, el calendario único."""
-    return bool(config.CALENDAR_AGENDAS_PREFIJO) and habilitado()
+    """¿Hay que descubrir agendas? Hace falta el prefijo y un token con el que ir a buscarlas.
+
+    No depende de que ya haya agendas en la tabla (a diferencia de `habilitado()`): la primera vez
+    la tabla está vacía y es justo esta lectura la que la llena. Si dependiera de ellas, nunca
+    se descubriría ninguna.
+    """
+    return bool(config.CALENDAR_AGENDAS_PREFIJO and config.CALENDAR_TOKEN_FILE)
+
+
+def necesita_bucle() -> bool:
+    """¿Hay algo que mantener al día en segundo plano?
+
+    El espejo y los bloqueos (`habilitado()`: hay a dónde escribir y leer) o el descubrimiento de
+    agendas (`multiagenda()`). Lo usan el arranque de la app y cada pasada del bucle.
+    """
+    return habilitado() or multiagenda()
 
 
 def agendas_vencidas() -> bool:
