@@ -127,22 +127,26 @@ def test_cambiar_el_nombre_del_calendario_renombra_la_agenda():
 
 
 # ---------- ausencias y baja suave ----------
-def test_una_ausencia_no_da_de_baja_y_la_segunda_si():
+def test_las_ausencias_se_cuentan_y_la_baja_llega_justo_en_el_umbral():
     store.agendas_sincronizar([_calendario(ANA, "Ana"), _calendario(BRENDA, "Brenda")])
 
     store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
     assert store.agenda_de(ANA)["activa"] == 1
     assert store.agenda_de(ANA)["ausencias"] == 1
 
-    reporte = store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
+    for _ in range(store.AUSENCIAS_PARA_BAJA - 2):                  # hasta una antes del umbral: sigue activa
+        store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
+    assert store.agenda_de(ANA)["activa"] == 1
+
+    reporte = store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])        # la lectura del umbral
     assert store.agenda_de(ANA)["activa"] == 0
     assert [a["nombre"] for a in reporte["bajas"]] == ["Ana"]
 
 
 def test_una_agenda_dada_de_baja_que_reaparece_vuelve_sin_ausencias():
     store.agendas_sincronizar([_calendario(ANA, "Ana"), _calendario(BRENDA, "Brenda")])
-    store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
-    store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
+    for _ in range(store.AUSENCIAS_PARA_BAJA):
+        store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
 
     reporte = store.agendas_sincronizar([_calendario(ANA, "Ana"), _calendario(BRENDA, "Brenda")])
 
@@ -196,9 +200,8 @@ def test_un_calendario_sin_permiso_de_escritura_se_excluye_y_se_avisa():
 # ---------- consultas del motor ----------
 def test_agendas_activas_deja_fuera_las_dadas_de_baja():
     store.agendas_sincronizar([_calendario(ANA, "Ana"), _calendario(BRENDA, "Brenda")])
-    store.agendas_sincronizar([_calendario(ANA, "Ana"), _calendario(BRENDA, "Brenda")])
-    store.agendas_sincronizar([_calendario(ANA, "Ana")])
-    store.agendas_sincronizar([_calendario(ANA, "Ana")])
+    for _ in range(store.AUSENCIAS_PARA_BAJA):
+        store.agendas_sincronizar([_calendario(ANA, "Ana")])
 
     assert [a["nombre"] for a in store.agendas(solo_activas=True)] == ["Ana"]
 

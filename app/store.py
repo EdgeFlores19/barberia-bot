@@ -218,7 +218,7 @@ def ocupados(ahora: str | None = None, *, agenda_id: str | None = None) -> set[s
     return {f["slot"] for f in filas}
 
 
-def confirmadas(agenda_id: str | None = None, ahora: str | None = None) -> list[dict[str, Any]]:
+def confirmadas(ahora: str | None = None, *, agenda_id: str | None = None) -> list[dict[str, Any]]:
     """Citas que ocupan agenda: las confirmadas y los apartados vigentes (lo que consume slots)."""
     init()
     filtro, extra = _filtro_agenda(agenda_id)
@@ -410,7 +410,7 @@ def listar(solo_confirmadas: bool = False) -> list[dict[str, Any]]:
 NOMBRE_RESERVADO = "Cualquiera"
 # Una agenda que falta dos lecturas seguidas se da de baja; con una sola ausencia no se toca
 # (un error pasajero de Google no debe sacar a una persona de la lista).
-AUSENCIAS_PARA_BAJA = 2
+AUSENCIAS_PARA_BAJA = config.CALENDAR_AGENDAS_AUSENCIAS      # 6 por defecto (~30 min)
 
 
 def _clave_agenda(con: sqlite3.Connection, calendar_id: str) -> str:
@@ -497,7 +497,8 @@ def agendas_resumen(ahora: str | None = None) -> dict[str, int]:
 
 
 def agendas_sincronizar(
-    calendarios: list[dict[str, Any]] | None, *, lectura_ok: bool = True, ahora: str | None = None
+    calendarios: list[dict[str, Any]] | None, *, lectura_ok: bool = True, ahora: str | None = None,
+    ausencias_para_baja: int | None = None,
 ) -> dict[str, Any]:
     """Alinea la tabla `agendas` con la lista de calendarios que devolvió Google.
 
@@ -507,6 +508,7 @@ def agendas_sincronizar(
     """
     init()
     ahora = ahora or _ahora()
+    umbral = AUSENCIAS_PARA_BAJA if ausencias_para_baja is None else ausencias_para_baja
     reporte: dict[str, Any] = {
         "altas": [], "renombres": [], "bajas": [], "reactivadas": [],
         "sin_permiso": [], "degradado": False,
@@ -518,7 +520,11 @@ def agendas_sincronizar(
             return reporte
         vistos: set[str] = set()
         usados: set[str] = set()
-        for cal in calendarios or []:
+        # En orden estable (nombre, id) y no en el que devuelva Google: así el sufijo " (2)" de dos
+        # calendarios con el mismo nombre y el `orden` de las altas de una misma lectura no cambian
+        # de una lectura a otra.
+        for cal in sorted(calendarios or [], key=lambda c: (str(c.get("nombre") or "").strip().lower(),
+                                                            str(c.get("calendar_id") or ""))):
             cid = (cal.get("calendar_id") or "").strip()
             if not cid:
                 continue
@@ -550,7 +556,7 @@ def agendas_sincronizar(
             if cid in vistos or previa["activa"] == 0:
                 continue
             ausencias = previa["ausencias"] + 1
-            activa = 0 if ausencias >= AUSENCIAS_PARA_BAJA else 1
+            activa = 0 if ausencias >= umbral else 1
             con.execute(
                 "UPDATE agendas SET ausencias = ?, activa = ? WHERE calendar_id = ?",
                 (ausencias, activa, cid),

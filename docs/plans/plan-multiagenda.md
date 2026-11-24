@@ -92,7 +92,9 @@ CREATE TABLE IF NOT EXISTS agendas (
 - **Reglas de sincronización** (puras, en `store`, para probarlas sin red):
   - Calendario nuevo → alta con el siguiente `orden`, `activa=1`. **Aviso al dueño.**
   - Mismo ID, nombre distinto → se actualiza el nombre. **Aviso al dueño.**
-  - Ausente en una lectura exitosa → `ausencias += 1`; con `ausencias >= 2` → `activa=0` (baja suave, nunca se borra).
+  - Ausente en una lectura exitosa → `ausencias += 1`; con `ausencias >= umbral` → `activa=0` (baja suave, nunca se borra).
+    *(Ajuste posterior: el umbral pasó de 2 a **6 lecturas ≈ 30 min** y es configurable con `CALENDAR_AGENDAS_AUSENCIAS`;
+    con 2 lecturas, un permiso quitado por error sacaba a alguien del equipo en unos 10 minutos.)*
     Reaparece → `activa=1`, `ausencias=0`.
   - **Lectura fallida o lista vacía cuando antes había agendas → se trata como error**: no cambia nada, marca el estado
     como degradado y avisa (una vez, no en cada ciclo). El bot sigue con la última lista buena.

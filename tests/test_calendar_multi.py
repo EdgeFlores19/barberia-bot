@@ -265,9 +265,10 @@ def test_calendario_nuevo_renombrado_y_ausente(lista_google, bd):
     reporte = calendar_sync.refrescar_agendas(forzar=True)
     assert [r["nombre"] for r in reporte["renombres"]] == ["Ana Ruiz"]
 
-    # Ausente una vez: se queda. Dos veces seguidas: se da de baja.
+    # Ausente unas lecturas: se queda. En la lectura del umbral (AUSENCIAS_PARA_BAJA): se da de baja.
     lista_google.lista = [_cal(f"{PREFIJO}Ana Ruiz", ANA)]
-    calendar_sync.refrescar_agendas(forzar=True)
+    for _ in range(store.AUSENCIAS_PARA_BAJA - 1):
+        calendar_sync.refrescar_agendas(forzar=True)
     assert len(store.agendas(solo_activas=True)) == 2
     reporte = calendar_sync.refrescar_agendas(forzar=True)
     assert [b["nombre"] for b in reporte["bajas"]] == ["Brenda"]

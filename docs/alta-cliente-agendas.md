@@ -115,8 +115,9 @@ listado falla, se conserva la última lista buena y se avisa una vez por Telegra
 | Borrar el calendario | Las citas quedan sin agenda; entran en «Citas por reasignar» y el dueño las reubica a mano. |
 | Se va una manicurista | Se quita del calendario compartido. Sus citas futuras siguen válidas hasta que el dueño las mueva. |
 
-La baja es suave a propósito (`AUSENCIAS_PARA_BAJA = 2`): un fallo de red o un 500 de Google no
-vacía el equipo.
+La baja es suave a propósito (`AUSENCIAS_PARA_BAJA`, 6 lecturas ≈ 30 min; ajustable con
+`CALENDAR_AGENDAS_AUSENCIAS`): un fallo de red, un 500 de Google o un permiso quitado por error no
+vacían el equipo ni sacan a nadie al instante.
 
 ## 7. Reversa
 

@@ -29,10 +29,13 @@ def equipo(bd):
     sv = datos["servicios"][0]["id"]
     libres = agendas.horarios_libres(datos, sv, activas, reloj.ahora(), limite=300)
     lejanos = [h for h in libres if datetime.fromisoformat(h) > reloj.ahora() + timedelta(days=2)]
-    dia = lejanos[0][:10]
-    horas = [h for h in lejanos if h.startswith(dia)]
-    otro_dia = [h for h in lejanos if not h.startswith(dia)][0]
-    assert len(horas) >= 8, "los datos de ejemplo deberían dar al menos 8 horarios en un día"
+    por_dia: dict[str, list[str]] = {}
+    for h in lejanos:
+        por_dia.setdefault(h[:10], []).append(h)
+    # Un día con horarios de sobra (un sábado tiene menos): la prueba no debe depender del día en que corra.
+    dia = next(d for d, hs in por_dia.items() if len(hs) >= 8)
+    horas = por_dia[dia]
+    otro_dia = next(hs[0] for d, hs in por_dia.items() if d != dia)
 
     class Equipo:
         pass
