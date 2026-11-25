@@ -225,7 +225,11 @@ async def leer_comprobante(contenido: bytes, mime: str) -> dict[str, Any] | None
                     "model": config.DEEPSEEK_VISION_MODEL,
                     "messages": [{"role": "user", "content": [
                         {"type": "text", "text": comprobante.PROMPT},
-                        {"type": "image_url", "image_url": {"url": imagen}},
+                        # `detail: original`: los dígitos chicos del comprobante (clave de rastreo,
+                        # cuenta) no sobreviven a una reducción. Es una sola imagen por comprobante,
+                        # así que el costo extra es despreciable.
+                        {"type": "image_url",
+                         "image_url": {"url": imagen, "detail": "original"}},
                     ]}],
                     "temperature": 0,
                     "max_tokens": 400,

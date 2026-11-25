@@ -61,7 +61,9 @@ DEEPSEEK_URL = os.getenv("DEEPSEEK_URL", "https://api.deepseek.com/chat/completi
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "12"))
 # Lectura del comprobante de anticipo (app/llm.leer_comprobante, ADR 0011): misma key y misma URL
-# de DeepSeek, pero con el modelo que acepta imágenes. VERIFICAR el nombre vigente en api-docs.deepseek.com.
+# de DeepSeek, pero con el modelo que acepta imágenes. `deepseek-flash` acepta JPEG, PNG, GIF y WebP
+# en bloques `image_url` y reescala cada imagen a ~1300×1300 px (tope de 1024 tokens) antes de
+# inferir: el reescalado puede estropear dígitos chicos del comprobante (clave de rastreo, cuenta).
 DEEPSEEK_VISION_MODEL = os.getenv("DEEPSEEK_VISION_MODEL", "deepseek-flash").strip()
 # Tope del archivo que se baja de WhatsApp para leerlo (un comprobante pesa menos de 1 MB).
 COMPROBANTE_MAX_BYTES = int(os.getenv("COMPROBANTE_MAX_BYTES", str(5 * 1024 * 1024)))

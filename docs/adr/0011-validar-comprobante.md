@@ -27,7 +27,9 @@ Un comprobante es una imagen y se puede editar: esto **sube el costo de la tramp
    le muestra a la clienta ni se interpreta como orden. Es el mismo principio del ADR 0005.
 2. **Modelo:** DeepSeek con visión (`DEEPSEEK_VISION_MODEL`, por defecto `deepseek-flash`), con la misma
    `DEEPSEEK_API_KEY` y la misma URL que el resto del bot, vía `httpx` (sin dependencias nuevas).
-   Acepta JPEG, PNG, WebP y GIF; **un PDF no se lee y va a revisión manual**.
+   La imagen viaja con `detail: "original"`: los dígitos chicos (clave de rastreo, cuenta) no sobreviven
+   a una reducción y es una sola imagen por comprobante. Acepta JPEG, PNG, WebP y GIF; **un PDF no se
+   lee y va a revisión manual**.
 3. **Qué se comprueba:**
    - **Monto** exactamente igual al anticipo de esa cita.
    - **Destino:** la cuenta visible coincide con la CLABE del negocio (completa, o por los últimos 4 si
@@ -61,15 +63,17 @@ Un comprobante es una imagen y se puede editar: esto **sube el costo de la tramp
 
 ## Riesgos y cosas por verificar
 
-- **Calidad de lectura:** el reescalado de imágenes grandes puede estropear dígitos pequeños (clave de
-  rastreo, cuenta). Probar con comprobantes reales de los bancos de las clientas antes de encender.
-- **Privacidad:** el comprobante es un dato financiero y ahora viaja al proveedor del modelo. El aviso de
-  privacidad (`static/privacidad.html`, secciones 2 y 5) hoy dice que el modelo solo recibe texto y pide
-  no compartir datos financieros: hay que actualizarlo antes de encender esto en producción.
-- **Meta:** ruta y campos de la descarga de media (`descargar_media`) marcados VERIFICAR contra la
-  documentación vigente.
-- El nombre del modelo con visión cambia con frecuencia (`DEEPSEEK_VISION_MODEL`): VERIFICAR en la
-  documentación de DeepSeek.
+- **Calidad de lectura:** el lector pide la imagen con `detail: "original"` para no perder los dígitos
+  pequeños (clave de rastreo, cuenta) en una reducción. Aun así hay que probarlo con comprobantes
+  reales de los bancos de las clientas antes de encender.
+- **Privacidad:** el comprobante es un dato financiero y viaja al proveedor del modelo. El aviso de
+  privacidad (`static/privacidad.html`, secciones 2 y 5) ya lo cubre: el comprobante del anticipo figura
+  entre los datos que se recaban y la fila del proveedor de modelo dice que recibe la imagen del
+  comprobante cuando se paga anticipo. Queda pendiente actualizarlo si cambia el proveedor o el flujo
+  de datos.
+- **Meta (verificado):** `GET /{MEDIA_ID}` con `Authorization: Bearer` devuelve `url`, `mime_type`,
+  `file_size` y `sha256`; luego `GET {url}` con el mismo token devuelve el binario. La URL caduca a los
+  5 minutos y el media ID de un webhook dura 7 días: por eso se descarga al recibirlo.
 
 ## Consecuencias
 
