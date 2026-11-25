@@ -90,8 +90,9 @@ CALENDAR_AGENDAS_PREFIJO=Agenda ·
 CALENDAR_AGENDAS_TTL_S=300
 ```
 
-Y el token como siempre (`GOOGLE_TOKEN_JSON`). `GOOGLE_CALENDAR_ID` deja de importar cuando hay
-agendas: las citas van al calendario de la agenda elegida.
+Y el token como siempre (`GOOGLE_TOKEN_JSON`). **No hace falta `GOOGLE_CALENDAR_ID`**: déjalo vacío. Con el
+prefijo y el token, el bot descubre las agendas solo, en los primeros ~30 segundos tras arrancar, y las citas van
+al calendario de la agenda elegida. Si ya había un `GOOGLE_CALENDAR_ID` de antes, con el prefijo puesto se ignora.
 
 Comprobación rápida: `GET /health` debe reportar las agendas activas y ninguna huérfana; si el
 listado falla, se conserva la última lista buena y se avisa una vez por Telegram.
@@ -114,8 +115,9 @@ listado falla, se conserva la última lista buena y se avisa una vez por Telegra
 | Borrar el calendario | Las citas quedan sin agenda; entran en «Citas por reasignar» y el dueño las reubica a mano. |
 | Se va una manicurista | Se quita del calendario compartido. Sus citas futuras siguen válidas hasta que el dueño las mueva. |
 
-La baja es suave a propósito (`AUSENCIAS_PARA_BAJA = 2`): un fallo de red o un 500 de Google no
-vacía el equipo.
+La baja es suave a propósito (`AUSENCIAS_PARA_BAJA`, 6 lecturas ≈ 30 min; ajustable con
+`CALENDAR_AGENDAS_AUSENCIAS`): un fallo de red, un 500 de Google o un permiso quitado por error no
+vacían el equipo ni sacan a nadie al instante.
 
 ## 7. Reversa
 

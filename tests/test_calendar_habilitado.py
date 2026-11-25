@@ -46,10 +46,11 @@ def test_con_agendas_el_bloqueo_tambien_sigue_encendido(multi, monkeypatch):
     assert calendar_sync.bloqueo_activo() is True
 
 
-def test_sin_agendas_y_sin_calendario_unico_queda_apagado(multi):
-    """Nada que leer: no se anuncia como habilitado."""
+def test_sin_agendas_y_sin_calendario_unico_no_hay_espejo_pero_si_descubrimiento(multi):
+    """Aún no hay a qué calendario escribir (espejo apagado), pero con prefijo y token sí hay que
+    ir a buscar las agendas: es la primera lectura la que las da de alta."""
     assert calendar_sync.habilitado() is False
-    assert calendar_sync.multiagenda() is False
+    assert calendar_sync.multiagenda() is True
 
 
 def test_sin_token_no_hay_forma_de_hablar_con_google(multi, monkeypatch):

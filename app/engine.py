@@ -266,7 +266,7 @@ def _ocupadas(agenda_id: str = "") -> list[dict[str, Any]]:
 
     Sin agenda se ve todo, como siempre: las citas viejas (sin agenda) y el calendario global.
     """
-    return store.confirmadas(agenda_id or None) + calendar_sync.bloqueos(_calendario(agenda_id))
+    return store.confirmadas(agenda_id=agenda_id or None) + calendar_sync.bloqueos(_calendario(agenda_id))
 
 
 def _agendas_activas() -> list[dict[str, Any]]:
@@ -305,7 +305,7 @@ def slots_disponibles(
                 datos, servicio_id, activas, ahora, limite=_LIMITE_HUECOS
             )
         agenda_id = ""                      # sin agendas dadas de alta: la de siempre
-    citas = store.confirmadas(agenda_id or None)
+    citas = store.confirmadas(agenda_id=agenda_id or None)
     if excluir_folio:
         # Al reagendar, su propio horario no debe bloquearse a sí mismo.
         citas = [c for c in citas if c["folio"] != excluir_folio]
@@ -333,7 +333,7 @@ def _candidatas_al_slot(
     por_agenda = agendas.candidatas(
         datos, servicio_id, activas, reloj.ahora(), limite=_LIMITE_HUECOS
     )
-    citas = store.listar()
+    citas = store.vigentes()          # confirmadas y apartados vigentes: lo que de verdad ocupa a cada agenda
     restantes = dict(por_agenda)
     orden: list[str] = []
     while restantes:

@@ -92,7 +92,9 @@ CREATE TABLE IF NOT EXISTS agendas (
 - **Reglas de sincronización** (puras, en `store`, para probarlas sin red):
   - Calendario nuevo → alta con el siguiente `orden`, `activa=1`. **Aviso al dueño.**
   - Mismo ID, nombre distinto → se actualiza el nombre. **Aviso al dueño.**
-  - Ausente en una lectura exitosa → `ausencias += 1`; con `ausencias >= 2` → `activa=0` (baja suave, nunca se borra).
+  - Ausente en una lectura exitosa → `ausencias += 1`; con `ausencias >= umbral` → `activa=0` (baja suave, nunca se borra).
+    *(Ajuste posterior: el umbral pasó de 2 a **6 lecturas ≈ 30 min** y es configurable con `CALENDAR_AGENDAS_AUSENCIAS`;
+    con 2 lecturas, un permiso quitado por error sacaba a alguien del equipo en unos 10 minutos.)*
     Reaparece → `activa=1`, `ausencias=0`.
   - **Lectura fallida o lista vacía cuando antes había agendas → se trata como error**: no cambia nada, marca el estado
     como degradado y avisa (una vez, no en cada ciclo). El bot sigue con la última lista buena.
@@ -342,6 +344,13 @@ En modo multiagenda el ID del calendario **se descubre**, así que la condición
 `bool(config.CALENDAR_TOKEN_FILE and (config.CALENDAR_ID or agendas activas))`, sin excepción ni aviso silencioso:
 si no hay token, `/health` lo dice. Además `salud()` deja de publicar `"calendar_id"` (`app/calendar_sync.py:87`)
 en cuanto el modo multiagenda está activo: el principio 4 también aplica a `/health`. M3 incluye las dos pruebas.
+
+> **Corrección posterior (descubierta al revisar la implementación).** La condición de C2 vale para el **espejo y los
+> bloqueos** (`habilitado()`), pero **no** para el **descubrimiento**: en el primer arranque la tabla `agendas` está
+> vacía y es la primera lectura de Google la que la llena. Si el descubrimiento (o el arranque del bucle de C3) también
+> exigiera "agendas activas", jamás se leería ninguna. Por eso el descubrimiento depende solo de **prefijo + token**
+> (`calendar_sync.multiagenda()`), y el arranque de la app y cada pasada del bucle usan
+> `calendar_sync.necesita_bucle()` (= `habilitado() or multiagenda()`). Prueba que lo fija: `tests/test_agendas_arranque.py`.
 
 **C3 · Las lecturas de Google salen del camino del mensaje (decidido: bucle de fondo).**
 Hoy `engine._sincronizar_calendar()` (`app/engine.py:243-258`) refresca con un `asyncio.to_thread` por mensaje; con

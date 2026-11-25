@@ -127,22 +127,26 @@ def test_cambiar_el_nombre_del_calendario_renombra_la_agenda():
 
 
 # ---------- ausencias y baja suave ----------
-def test_una_ausencia_no_da_de_baja_y_la_segunda_si():
+def test_las_ausencias_se_cuentan_y_la_baja_llega_justo_en_el_umbral():
     store.agendas_sincronizar([_calendario(ANA, "Ana"), _calendario(BRENDA, "Brenda")])
 
     store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
     assert store.agenda_de(ANA)["activa"] == 1
     assert store.agenda_de(ANA)["ausencias"] == 1
 
-    reporte = store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
+    for _ in range(store.AUSENCIAS_PARA_BAJA - 2):                  # hasta una antes del umbral: sigue activa
+        store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
+    assert store.agenda_de(ANA)["activa"] == 1
+
+    reporte = store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])        # la lectura del umbral
     assert store.agenda_de(ANA)["activa"] == 0
     assert [a["nombre"] for a in reporte["bajas"]] == ["Ana"]
 
 
 def test_una_agenda_dada_de_baja_que_reaparece_vuelve_sin_ausencias():
     store.agendas_sincronizar([_calendario(ANA, "Ana"), _calendario(BRENDA, "Brenda")])
-    store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
-    store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
+    for _ in range(store.AUSENCIAS_PARA_BAJA):
+        store.agendas_sincronizar([_calendario(BRENDA, "Brenda")])
 
     reporte = store.agendas_sincronizar([_calendario(ANA, "Ana"), _calendario(BRENDA, "Brenda")])
 
@@ -196,9 +200,8 @@ def test_un_calendario_sin_permiso_de_escritura_se_excluye_y_se_avisa():
 # ---------- consultas del motor ----------
 def test_agendas_activas_deja_fuera_las_dadas_de_baja():
     store.agendas_sincronizar([_calendario(ANA, "Ana"), _calendario(BRENDA, "Brenda")])
-    store.agendas_sincronizar([_calendario(ANA, "Ana"), _calendario(BRENDA, "Brenda")])
-    store.agendas_sincronizar([_calendario(ANA, "Ana")])
-    store.agendas_sincronizar([_calendario(ANA, "Ana")])
+    for _ in range(store.AUSENCIAS_PARA_BAJA):
+        store.agendas_sincronizar([_calendario(ANA, "Ana")])
 
     assert [a["nombre"] for a in store.agendas(solo_activas=True)] == ["Ana"]
 
@@ -343,3 +346,24 @@ def test_una_base_que_ya_existia_gana_las_columnas_de_agenda():
     columnas = {f[1] for f in con.execute("PRAGMA table_info(citas)")}
     con.close()
     assert {"agenda_id", "agenda_nombre"} <= columnas
+
+
+# ---------- citas que ocupan agenda, con todas las columnas ----------
+def test_vigentes_trae_confirmadas_y_apartados_vigentes_con_todas_las_columnas(bd):
+    from datetime import timedelta
+    from app import reloj
+
+    ahora = reloj.ahora()
+    futuro = (ahora + timedelta(hours=1)).isoformat(timespec="seconds")
+    pasado = (ahora - timedelta(hours=1)).isoformat(timespec="seconds")
+    confirmada = store.crear("2026-12-01T10:00", "manicura", "Ana", "5214491112233", agenda_id="ab12cd34")
+    store.crear("2026-12-01T11:00", "manicura", "Vigente", "5210000000002", pendiente_hasta=futuro, anticipo=200)
+    store.crear("2026-12-01T12:00", "manicura", "Vencido", "5210000000003", pendiente_hasta=pasado, anticipo=200)
+    cancelada = store.crear("2026-12-01T13:00", "manicura", "Cancelada", "5210000000004")
+    store.cancelar(cancelada["folio"])
+
+    filas = store.vigentes()
+
+    assert sorted(f["nombre"] for f in filas) == ["Ana", "Vigente"]
+    ana = next(f for f in filas if f["nombre"] == "Ana")
+    assert (ana["telefono"], ana["agenda_id"], ana["folio"]) == ("5214491112233", "ab12cd34", confirmada["folio"])

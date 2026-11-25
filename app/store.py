@@ -6,6 +6,7 @@ La interfaz pública arranca de la que usaba el store en memoria de F1
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import sqlite3
 import threading
@@ -218,7 +219,7 @@ def ocupados(ahora: str | None = None, *, agenda_id: str | None = None) -> set[s
     return {f["slot"] for f in filas}
 
 
-def confirmadas(agenda_id: str | None = None, ahora: str | None = None) -> list[dict[str, Any]]:
+def confirmadas(ahora: str | None = None, *, agenda_id: str | None = None) -> list[dict[str, Any]]:
     """Citas que ocupan agenda: las confirmadas y los apartados vigentes (lo que consume slots)."""
     init()
     filtro, extra = _filtro_agenda(agenda_id)
@@ -228,6 +229,19 @@ def confirmadas(agenda_id: str | None = None, ahora: str | None = None) -> list[
             f" FROM citas WHERE {_BLOQUEA}{filtro}",
             (ahora or _ahora(), *extra),
         ).fetchall()
+    return [dict(f) for f in filas]
+
+
+def vigentes(ahora: str | None = None) -> list[dict[str, Any]]:
+    """Las citas que ocupan agenda (confirmadas y apartados que no vencen), con TODAS sus columnas.
+
+    A diferencia de `confirmadas()` (que devuelve lo mínimo para calcular horarios) trae el teléfono y
+    la agenda: es lo que necesita la asignación de «cualquiera». Las canceladas, las expiradas y los
+    apartados vencidos no cuentan: ya no ocupan a nadie.
+    """
+    init()
+    with _con() as con:
+        filas = con.execute(f"SELECT * FROM citas WHERE {_BLOQUEA}", (ahora or _ahora(),)).fetchall()
     return [dict(f) for f in filas]
 
 
@@ -397,7 +411,7 @@ def listar(solo_confirmadas: bool = False) -> list[dict[str, Any]]:
 NOMBRE_RESERVADO = "Cualquiera"
 # Una agenda que falta dos lecturas seguidas se da de baja; con una sola ausencia no se toca
 # (un error pasajero de Google no debe sacar a una persona de la lista).
-AUSENCIAS_PARA_BAJA = 2
+AUSENCIAS_PARA_BAJA = config.CALENDAR_AGENDAS_AUSENCIAS      # 6 por defecto (~30 min)
 
 
 def _clave_agenda(con: sqlite3.Connection, calendar_id: str) -> str:
@@ -420,6 +434,17 @@ def _nombre_agenda(base: str, usados: set[str]) -> str:
         final = f"{candidato} ({n})"
         n += 1
     return final
+
+
+def _clave_orden(nombre: str) -> tuple[Any, ...]:
+    """Clave de orden natural: «Agenda 2» va antes que «Agenda 10».
+
+    Comparar texto a secas pondría «Agenda 10» entre la 1 y la 2, y con más de nueve agendas
+    el menú enseñaría un orden que no es el que la dueña ve en Google. Los tramos numéricos
+    se comparan como número y el resto como texto en minúsculas.
+    """
+    tramos = re.split(r"(\d+)", str(nombre or "").strip().lower())
+    return tuple(int(t) if t.isdigit() else t for t in tramos if t != "")
 
 
 def agendas(solo_activas: bool = False) -> list[dict[str, Any]]:
@@ -484,7 +509,8 @@ def agendas_resumen(ahora: str | None = None) -> dict[str, int]:
 
 
 def agendas_sincronizar(
-    calendarios: list[dict[str, Any]] | None, *, lectura_ok: bool = True, ahora: str | None = None
+    calendarios: list[dict[str, Any]] | None, *, lectura_ok: bool = True, ahora: str | None = None,
+    ausencias_para_baja: int | None = None,
 ) -> dict[str, Any]:
     """Alinea la tabla `agendas` con la lista de calendarios que devolvió Google.
 
@@ -494,6 +520,7 @@ def agendas_sincronizar(
     """
     init()
     ahora = ahora or _ahora()
+    umbral = AUSENCIAS_PARA_BAJA if ausencias_para_baja is None else ausencias_para_baja
     reporte: dict[str, Any] = {
         "altas": [], "renombres": [], "bajas": [], "reactivadas": [],
         "sin_permiso": [], "degradado": False,
@@ -505,7 +532,11 @@ def agendas_sincronizar(
             return reporte
         vistos: set[str] = set()
         usados: set[str] = set()
-        for cal in calendarios or []:
+        # En orden estable (nombre, id) y no en el que devuelva Google: así el sufijo " (2)" de dos
+        # calendarios con el mismo nombre y el `orden` de las altas de una misma lectura no cambian
+        # de una lectura a otra.
+        for cal in sorted(calendarios or [], key=lambda c: (_clave_orden(c.get("nombre") or ""),
+                                                            str(c.get("calendar_id") or ""))):
             cid = (cal.get("calendar_id") or "").strip()
             if not cid:
                 continue
@@ -537,7 +568,7 @@ def agendas_sincronizar(
             if cid in vistos or previa["activa"] == 0:
                 continue
             ausencias = previa["ausencias"] + 1
-            activa = 0 if ausencias >= AUSENCIAS_PARA_BAJA else 1
+            activa = 0 if ausencias >= umbral else 1
             con.execute(
                 "UPDATE agendas SET ausencias = ?, activa = ? WHERE calendar_id = ?",
                 (ausencias, activa, cid),

@@ -40,9 +40,10 @@ derivada de su `calendar_id`.
 
 ### 2. La baja es suave, y no borra citas
 
-Si un calendario desaparece del listado (renombrado sin prefijo, sin acceso, borrado) se marca dos
-lecturas seguidas (`AUSENCIAS_PARA_BAJA = 2`) antes de darlo de baja: un fallo de red no debe
-vaciar el equipo. Las citas ya hechas **siguen siendo válidas** y caen en «Citas por reasignar»
+Si un calendario desaparece del listado (renombrado sin prefijo, sin acceso, borrado) se marca varias
+lecturas seguidas (`AUSENCIAS_PARA_BAJA`, 6 por defecto ≈ 30 min con el TTL de 300 s; se ajusta con
+`CALENDAR_AGENDAS_AUSENCIAS`) antes de darlo de baja: un fallo de red o un permiso quitado por error no debe
+vaciar el equipo ni sacar a nadie al instante. Las citas ya hechas **siguen siendo válidas** y caen en «Citas por reasignar»
 (`store.citas_huerfanas`), que se publica en el resumen diario. Al renombrar, la próxima cita sale
 con el nombre nuevo; las viejas conservan el nombre que tenían (`agenda_nombre` se guarda en la
 cita, no se resuelve al leer).
@@ -87,4 +88,4 @@ que nadie ve.
   menú de personas admite hasta 9 (10 filas es el tope de la lista de WhatsApp) y no pagina; elegir
   por texto libre («con Ana el viernes») queda para v2.
 - **Riesgo asumido:** un renombre o borrado por error cambia el equipo en vivo. Por eso el prefijo
-  es obligatorio, la baja tarda dos lecturas y cada cambio avisa al dueño.
+  es obligatorio, la baja tarda unos 30 minutos (6 lecturas) y cada cambio avisa al dueño.

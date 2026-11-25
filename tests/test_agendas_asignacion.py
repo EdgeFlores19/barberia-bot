@@ -149,3 +149,43 @@ def test_candidatas_usa_los_lectores_por_defecto_si_no_se_inyectan(monkeypatch: 
     monkeypatch.setattr(sync, "bloqueos", lambda *_: [])
     out = ag.candidatas(_datos(), "corte", [ANA], AHORA, limite=1)
     assert out == {"ana": ["2026-11-23T10:00"]}
+
+
+# ---------- con la forma real de los datos: citas.agenda_id guarda la CLAVE ----------
+CANDIDATAS = {"ana": ["2026-11-23T10:00"], "laura": ["2026-11-23T10:00"]}
+
+
+def _c(agenda: str, slot: str, tel: str = "1", estado: str = "confirmada") -> dict:
+    return {"agenda_id": agenda, "slot": slot, "telefono": tel, "estado": estado}
+
+
+def test_elegir_cuenta_las_citas_que_traen_la_clave_de_la_agenda() -> None:
+    citas = [_c("ana", "2026-11-23T11:00"), _c("ana", "2026-11-23T12:00", tel="2")]
+
+    assert ag.elegir("2026-11-23T10:00", CANDIDATAS, citas, [ANA, LAURA]) == "laura"
+
+
+def test_elegir_sigue_aceptando_el_id_del_calendario() -> None:
+    citas = [_c("cal-ana", "2026-11-23T11:00"), _c("cal-ana", "2026-11-23T12:00", tel="2")]
+
+    assert ag.elegir("2026-11-23T10:00", CANDIDATAS, citas, [ANA, LAURA]) == "laura"
+
+
+def test_elegir_la_misma_de_la_ultima_vez_con_la_clave() -> None:
+    citas = [_c("laura", "2026-11-20T10:00", tel="555")]
+
+    assert ag.elegir("2026-11-23T10:00", CANDIDATAS, citas, [ANA, LAURA], telefono="555") == "laura"
+
+
+@pytest.mark.parametrize("estado", ["cancelada", "expirada"])
+def test_elegir_ignora_las_citas_que_ya_no_ocupan_a_nadie(estado: str) -> None:
+    citas = [_c("ana", "2026-11-23T11:00", estado=estado), _c("ana", "2026-11-23T12:00", tel="2", estado=estado),
+             _c("laura", "2026-11-23T13:00", tel="3")]
+
+    assert ag.elegir("2026-11-23T10:00", CANDIDATAS, citas, [ANA, LAURA]) == "ana"    # 0 activas contra 1
+
+
+def test_elegir_una_cita_cancelada_no_es_la_ultima_vez() -> None:
+    citas = [_c("laura", "2026-11-20T10:00", tel="555", estado="cancelada")]
+
+    assert ag.elegir("2026-11-23T10:00", CANDIDATAS, citas, [ANA, LAURA], telefono="555") == "ana"
