@@ -66,6 +66,10 @@ Un comprobante es una imagen y se puede editar: esto **sube el costo de la tramp
 - **Calidad de lectura:** el lector pide la imagen con `detail: "original"` para no perder los dígitos
   pequeños (clave de rastreo, cuenta) en una reducción. Aun así hay que probarlo con comprobantes
   reales de los bancos de las clientas antes de encender.
+- **Sin salida de confirmación manual (deuda):** si el bot no valida un comprobante que sí era bueno, la
+  cita queda apartada y se vence sola; no hay acción de la dueña para confirmarla. Se decidió posponerlo
+  a una siguiente entrega, con la validación apagada el caso no existe todavía. Al encenderla, esa salida
+  es requisito: la dueña tiene que poder confirmar desde Telegram sin abrir un endpoint público.
 - **Privacidad:** el comprobante es un dato financiero y viaja al proveedor del modelo. El aviso de
   privacidad (`static/privacidad.html`, secciones 2 y 5) ya lo cubre: el comprobante del anticipo figura
   entre los datos que se recaban y la fila del proveedor de modelo dice que recibe la imagen del
