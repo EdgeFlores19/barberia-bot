@@ -6,6 +6,7 @@ La interfaz pública arranca de la que usaba el store en memoria de F1
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import sqlite3
 import threading
@@ -435,6 +436,17 @@ def _nombre_agenda(base: str, usados: set[str]) -> str:
     return final
 
 
+def _clave_orden(nombre: str) -> tuple[Any, ...]:
+    """Clave de orden natural: «Agenda 2» va antes que «Agenda 10».
+
+    Comparar texto a secas pondría «Agenda 10» entre la 1 y la 2, y con más de nueve agendas
+    el menú enseñaría un orden que no es el que la dueña ve en Google. Los tramos numéricos
+    se comparan como número y el resto como texto en minúsculas.
+    """
+    tramos = re.split(r"(\d+)", str(nombre or "").strip().lower())
+    return tuple(int(t) if t.isdigit() else t for t in tramos if t != "")
+
+
 def agendas(solo_activas: bool = False) -> list[dict[str, Any]]:
     """Agendas dadas de alta, en el orden en que se le presentan a la clienta."""
     init()
@@ -523,7 +535,7 @@ def agendas_sincronizar(
         # En orden estable (nombre, id) y no en el que devuelva Google: así el sufijo " (2)" de dos
         # calendarios con el mismo nombre y el `orden` de las altas de una misma lectura no cambian
         # de una lectura a otra.
-        for cal in sorted(calendarios or [], key=lambda c: (str(c.get("nombre") or "").strip().lower(),
+        for cal in sorted(calendarios or [], key=lambda c: (_clave_orden(c.get("nombre") or ""),
                                                             str(c.get("calendar_id") or ""))):
             cid = (cal.get("calendar_id") or "").strip()
             if not cid:
