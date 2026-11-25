@@ -43,6 +43,10 @@ IP_DESDE_DERECHA = int(os.getenv("IP_DESDE_DERECHA", "0"))
 #   ANTICIPO_ACTIVO: vacío = lo que diga el JSON; "1"/"0" = fuerza encendido/apagado.
 _AA = os.getenv("ANTICIPO_ACTIVO", "").strip().lower()
 ANTICIPO_ACTIVO: bool | None = None if not _AA else _AA in {"1", "true", "yes", "si", "sí"}
+# VALIDAR_COMPROBANTE: igual que el anterior, para la lectura del comprobante (ADR 0011). Sirve para
+# apagarla o encenderla desde Render sin tocar el JSON ni redesplegar código.
+_VC = os.getenv("VALIDAR_COMPROBANTE", "").strip().lower()
+VALIDAR_COMPROBANTE: bool | None = None if not _VC else _VC in {"1", "true", "yes", "si", "sí"}
 ANTICIPO_BANCO = os.getenv("ANTICIPO_BANCO", "").strip()
 ANTICIPO_CLABE = os.getenv("ANTICIPO_CLABE", "").replace(" ", "").strip()
 ANTICIPO_TITULAR = os.getenv("ANTICIPO_TITULAR", "").strip()
@@ -56,6 +60,11 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 DEEPSEEK_URL = os.getenv("DEEPSEEK_URL", "https://api.deepseek.com/chat/completions")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "12"))
+# Lectura del comprobante de anticipo (app/llm.leer_comprobante, ADR 0011): misma key y misma URL
+# de DeepSeek, pero con el modelo que acepta imágenes. VERIFICAR el nombre vigente en api-docs.deepseek.com.
+DEEPSEEK_VISION_MODEL = os.getenv("DEEPSEEK_VISION_MODEL", "deepseek-flash").strip()
+# Tope del archivo que se baja de WhatsApp para leerlo (un comprobante pesa menos de 1 MB).
+COMPROBANTE_MAX_BYTES = int(os.getenv("COMPROBANTE_MAX_BYTES", str(5 * 1024 * 1024)))
 
 # Google Calendar: OPCIONAL. Sin calendar id o sin token, el bot agenda igual.
 CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "").strip()

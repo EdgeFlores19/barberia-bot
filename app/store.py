@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS resumen_envios (
     corte        TEXT
 );
 
+-- Claves de rastreo de SPEI ya vistas en un comprobante y la cita a la que se asociaron: así el
+-- mismo comprobante no sirve para apartar dos citas (ADR 0011). Tabla aparte a propósito: no
+-- toca `citas`, cuya migración es la parte delicada con disco persistente (ADR 0008).
+CREATE TABLE IF NOT EXISTS comprobantes_vistos (
+    clave  TEXT PRIMARY KEY,
+    folio  TEXT NOT NULL,
+    visto  TEXT NOT NULL
+);
+
 -- Un renglón por calendario de Google del negocio. El `calendar_id` es la identidad; la
 -- `clave` (8 hex) es lo único que se puede mandar al cliente; el `nombre` es solo etiqueta.
 CREATE TABLE IF NOT EXISTS agendas (
@@ -384,6 +393,40 @@ def apartado_reciente(telefono: str, ahora: str | None = None, gracia_horas: int
         if f["telefono"] and t10(f["telefono"]) == t10(telefono):
             return dict(f)
     return None
+
+
+def registrar_clave(clave: str, folio: str, ahora: str | None = None) -> str:
+    """Asocia una clave de rastreo a una cita y devuelve el folio al que pertenece.
+
+    Si la clave ya estaba, NO se pisa: devuelve el folio que la vio primero. Quien llama compara
+    con el suyo (mismo folio = la clienta reenvió su comprobante; otro folio = reutilizado).
+    """
+    init()
+    ahora = ahora or _ahora()
+    folio = folio.strip().upper()
+    with _candado, _con() as con:
+        con.execute("INSERT OR IGNORE INTO comprobantes_vistos (clave, folio, visto) VALUES (?, ?, ?)",
+                    (clave, folio, ahora))
+        fila = con.execute("SELECT folio FROM comprobantes_vistos WHERE clave = ?", (clave,)).fetchone()
+    return fila["folio"]
+
+
+def extender_apartado(folio: str, vence: str, ahora: str | None = None) -> dict[str, Any] | None:
+    """Alarga el apartado de una cita pendiente (nunca lo acorta). None si no estaba pendiente.
+
+    Se usa cuando un comprobante no cuadró y la dueña necesita tiempo para revisarlo sin que el
+    horario se libere en medio.
+    """
+    init()
+    ahora = ahora or _ahora()
+    with _candado, _con() as con:
+        con.execute(
+            "UPDATE citas SET vence = ?, actualizada = ? WHERE folio = ? AND estado = 'pendiente' AND vence < ?",
+            (vence, ahora, folio.strip().upper(), vence),
+        )
+        fila = con.execute("SELECT * FROM citas WHERE folio = ? AND estado = 'pendiente'",
+                           (folio.strip().upper(),)).fetchone()
+    return _fila(fila)
 
 
 def set_evento(folio: str, event_id: str | None) -> None:

@@ -21,7 +21,7 @@ al instante, sin dinero de por medio.
 2. **Flujo (solo WhatsApp):** servicio → horario → nombre → **condiciones + botón "Acepto"** (la
    aceptación queda guardada con fecha y hora) → cuenta de pago con el folio como concepto y el
    horario **apartado** → la clienta manda **foto, captura o PDF** → la cita se confirma.
-3. **El bot no verifica el pago.** Cualquier imagen o PDF cuenta; por eso el mensaje dice "la
+3. **El bot no verifica el pago** (desde el [ADR 0011](0011-validar-comprobante.md) puede leer el comprobante, si se activa). Cualquier imagen o PDF cuenta; por eso el mensaje dice "la
    manicurista verificará tu pago" y el dueño recibe el aviso. Si algo no cuadra, ella contacta a la
    clienta a mano.
 4. **El apartado se libera solo.** Un apartado bloquea el horario mientras `vence > ahora`; no hay

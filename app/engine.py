@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from . import agendas, anticipo, avisos, calendar_sync, config, llm, reloj, store
+from . import agendas, anticipo, avisos, calendar_sync, comprobante, config, llm, reloj, store, wa_cliente
 from . import slots as horarios
 from .telefono import t10 as _t10
 
@@ -1442,6 +1442,13 @@ async def _recibir_media(s: Sesion, media: dict[str, str], datos: dict[str, Any]
         ok, _motivo = horarios.validar(datos, cita["servicio_id"], cita["slot"], _ocupadas(cita.get("agenda_id") or ""), ahora)
         if not ok:
             return _comprobante_sin_horario(s, cita, datos)
+    validacion, avisos_validacion = "", ()
+    if anticipo.validar_comprobante(datos):
+        # ADR 0011: el modelo lee, el código decide. Si no cuadra, la cita NO se confirma.
+        veredicto = await _validar_comprobante(cita, media, ahora)
+        if not veredicto.ok:
+            return await _comprobante_en_revision(s, cita, veredicto, datos, ahora, tardio)
+        validacion, avisos_validacion = _texto_validacion(veredicto), veredicto.avisos
     try:
         cita = store.registrar_comprobante(cita["folio"], tipo, media.get("id", ""), ahora_iso)
     except (store.SlotOcupado, store.EstadoInvalido):
@@ -1458,14 +1465,60 @@ async def _recibir_media(s: Sesion, media: dict[str, str], datos: dict[str, Any]
     sv = _servicio(datos, cita["servicio_id"]) or {"nombre": cita["servicio_id"], "precio": 0}
     etiqueta = _etiqueta_slot(cita["slot"])
     urgente = anticipo.es_urgente(c, cita["slot"], ahora)
-    if urgente or tardio or not c["resumen_diario"]:
+    if urgente or tardio or avisos_validacion or not c["resumen_diario"]:
         await asyncio.to_thread(
             avisos.notificar_anticipo, cita=cita, servicio=sv["nombre"], etiqueta=etiqueta,
-            restante=anticipo.restante(sv["precio"], c), telefono=s.telefono, urgente=urgente, tardio=tardio)
+            restante=anticipo.restante(sv["precio"], c), telefono=s.telefono, urgente=urgente, tardio=tardio,
+            validacion=validacion)
 
     s.folio, s.nombre, s.paso, s.resuelta = cita["folio"], cita["nombre"], "fin", True
     return [_t(anticipo.texto_comprobante_ok(c, sv["nombre"], etiqueta, cita["folio"], sv["precio"])),
             _b("¿Algo más?", MENU)], s
+
+
+async def _validar_comprobante(cita: dict[str, Any], media: dict[str, str], ahora: datetime) -> comprobante.Veredicto:
+    """Baja el archivo, lo lee el modelo con visión y se compara contra lo que debía traer."""
+    if (media.get("mime") or "").lower() == "application/pdf":
+        return comprobante.sin_lectura("Mandó un PDF: el bot solo lee fotos y capturas.")
+    archivo = await wa_cliente.descargar_media(media.get("id", ""))
+    if archivo is None:
+        return comprobante.sin_lectura("No se pudo bajar el archivo de WhatsApp.")
+    lectura = await llm.leer_comprobante(*archivo)
+    clave = (lectura or {}).get("clave_rastreo")
+    # Se registra aunque otra regla falle: así un comprobante rechazado tampoco sirve en otra cita.
+    clave_de = store.registrar_clave(clave, cita["folio"]) if clave else None
+    return comprobante.evaluar(
+        lectura, monto=cita["anticipo_monto"], folio=cita["folio"], clabe=config.ANTICIPO_CLABE,
+        titular=config.ANTICIPO_TITULAR, desde=datetime.fromisoformat(cita["creada"]).date(),
+        hoy=ahora.date(), clave_de=clave_de)
+
+
+def _texto_validacion(v: comprobante.Veredicto) -> str:
+    """Lo que el bot comprobó solo, para el aviso a la dueña."""
+    texto = "✅ El bot validó el comprobante: monto, cuenta y fecha cuadran."
+    if v.avisos:
+        texto += "\nOjo:\n" + "\n".join(f"• {a}" for a in v.avisos)
+    return texto
+
+
+async def _comprobante_en_revision(s: Sesion, cita: dict[str, Any], v: comprobante.Veredicto,
+                                   datos: dict[str, Any], ahora: datetime, tardio: bool):
+    """El comprobante no cuadró (o no se pudo leer): la cita sigue apartada y lo revisa la dueña."""
+    hasta = None
+    if cita["estado"] == "pendiente":
+        # Más tiempo para revisar, sin pasarse del propio horario de la cita.
+        limite = min(ahora + timedelta(hours=float(anticipo.cfg(datos)["revision_horas"])),
+                     datetime.fromisoformat(cita["slot"]))
+        fila = store.extender_apartado(cita["folio"], limite.isoformat(timespec="seconds"))
+        if fila:
+            hasta = horarios.etiqueta(fila["vence"])
+    sv = _servicio(datos, cita["servicio_id"]) or {"nombre": cita["servicio_id"]}
+    await asyncio.to_thread(
+        avisos.notificar_comprobante_revision, cita=cita, servicio=sv["nombre"],
+        etiqueta=_etiqueta_slot(cita["slot"]), telefono=s.telefono, motivos=v.motivos,
+        avisos=v.avisos, hasta=hasta, tardio=tardio)
+    s.folio, s.nombre, s.paso = cita["folio"], cita["nombre"], "fin"
+    return [_t(anticipo.texto_en_revision(hasta)), _b("¿Algo más?", MENU)], s
 
 
 # ---------- cancelar / reagendar ----------

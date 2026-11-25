@@ -24,6 +24,36 @@ def _url() -> str:
     return f"https://graph.facebook.com/{config.WA_API_VERSION}/{config.WA_PHONE_ID}/messages"
 
 
+async def descargar_media(media_id: str) -> tuple[bytes, str] | None:
+    """Baja un archivo que la clienta mandó (el comprobante). (bytes, mime) o None si no se pudo.
+
+    Son dos pasos: primero los metadatos (URL temporal, tipo y tamaño) y luego los bytes, ambos con
+    el token. Esa URL caduca en minutos: hay que bajar el archivo al recibirlo.
+    VERIFICAR contra la documentación vigente de Meta (ruta, campos y encabezados).
+    """
+    if config.WA_MODO == "consola" or not (config.WA_TOKEN and media_id):
+        return None
+    cabeceras = {"Authorization": f"Bearer {config.WA_TOKEN}"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as cli:
+            meta = await cli.get(f"https://graph.facebook.com/{config.WA_API_VERSION}/{media_id}",
+                                 headers=cabeceras)
+            meta.raise_for_status()
+            info = meta.json()
+            url, mime = str(info.get("url") or ""), str(info.get("mime_type") or "")
+            if not url.startswith("https://") or int(info.get("file_size") or 0) > config.COMPROBANTE_MAX_BYTES:
+                return None
+            r = await cli.get(url, headers=cabeceras)
+            r.raise_for_status()
+            contenido = r.content
+    except (httpx.HTTPError, ValueError, AttributeError, TypeError) as exc:
+        log.warning("wa: no pude bajar el archivo (%s)", type(exc).__name__)
+        return None
+    if not contenido or len(contenido) > config.COMPROBANTE_MAX_BYTES:
+        return None
+    return contenido, mime
+
+
 async def enviar(wa_id: str, payload: dict[str, Any]) -> bool:
     """Manda un payload ya armado. Devuelve True si Meta lo aceptó."""
     global ULTIMO_CODIGO_META

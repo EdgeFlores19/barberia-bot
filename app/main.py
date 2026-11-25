@@ -91,6 +91,10 @@ DATOS = engine.cargar_datos()
 # dígito de más o de menos) mandaría el dinero de las clientas a ninguna parte.
 if anticipo.activo(DATOS) and (_problemas := anticipo.problemas_de_pago()):
     raise RuntimeError("El anticipo está activo pero los datos de pago no están bien: " + "; ".join(_problemas))
+# Lo mismo con la lectura de comprobantes: encendida sin la key del modelo, todo comprobante
+# se iría a revisión manual y nadie se enteraría de por qué.
+if _problemas := anticipo.problemas_de_validacion(DATOS):
+    raise RuntimeError("; ".join(_problemas))
 store.init()
 if config.SEED_DEMO:
     # El plan free de Render reinicia el disco: sin esto la agenda abre vacía.
