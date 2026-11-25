@@ -26,6 +26,14 @@ def test_privacidad_se_sirve_y_cubre_lfpdppp():
     ):
         assert clave in texto, f"falta en el aviso: {clave}"
 
+    # Candado del comprobante: si el aviso deja de cubrir la imagen que se manda al
+    # proveedor del modelo, este test lo delata (ADR 0011).
+    assert "comprobante" in texto
+    fila_modelo = next(f for f in texto.split("<tr>") if "DeepSeek" in f)
+    assert "imagen del comprobante" in fila_modelo, (
+        "la fila del proveedor de modelo debe decir que recibe la imagen del comprobante"
+    )
+
 
 def test_terminos_se_sirven_y_son_coherentes_con_el_negocio():
     r = CLIENTE.get("/terminos")

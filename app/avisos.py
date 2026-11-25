@@ -50,8 +50,11 @@ def _contacto(telefono: str) -> str:
 
 
 def notificar_anticipo(*, cita: dict, servicio: str, etiqueta: str, restante: int,
-                       telefono: str, urgente: bool, tardio: bool) -> None:
-    """Llegó el comprobante de un anticipo: el dueño debe verificar el depósito."""
+                       telefono: str, urgente: bool, tardio: bool, validacion: str = "") -> None:
+    """Llegó el comprobante de un anticipo: el dueño debe verificar el depósito.
+
+    `validacion`: lo que el bot comprobó solo (ADR 0011), si la lectura de comprobantes está activa.
+    """
     log.warning("anticipo: comprobante de …%s para la cita %s%s", t4(telefono), cita["folio"],
                 " (urgente)" if urgente else "")
     marca = "⚡ " if urgente else ""
@@ -64,7 +67,36 @@ def notificar_anticipo(*, cita: dict, servicio: str, etiqueta: str, restante: in
         f"Anticipo: ${cita['anticipo_monto']:,} · Resta por pagar: ${restante:,}\n"
         f"Concepto esperado: {cita['nombre']} / {cita['folio']}\n"
         f"{_contacto(telefono)}\n"
+        f"{validacion + chr(10) if validacion else ''}"
         "Verifica el depósito en tu banco."
+    )
+
+
+def notificar_comprobante_revision(*, cita: dict, servicio: str, etiqueta: str, telefono: str,
+                                   motivos: tuple[str, ...] | list[str],
+                                   avisos: tuple[str, ...] | list[str], hasta: str | None,
+                                   tardio: bool) -> None:
+    """Un comprobante NO pasó la validación del bot: la cita sigue apartada, no confirmada."""
+    log.warning("anticipo: comprobante de …%s para la cita %s va a revisión (%d motivo(s))",
+                t4(telefono), cita["folio"], len(motivos))
+    if hasta:
+        estado = f"La cita sigue APARTADA (hasta {hasta}); no está confirmada."
+    elif tardio:
+        estado = "El apartado ya había vencido: el horario NO está retenido y la cita no está confirmada."
+    else:
+        estado = "La cita no está confirmada."
+    razones = "\n".join(f"• {m}" for m in motivos)
+    extra = ("\nTambién ten en cuenta:\n" + "\n".join(f"• {a}" for a in avisos)) if avisos else ""
+    _telegram(
+        "🔎 Comprobante por revisar (el bot no pudo validarlo solo).\n"
+        f"Cita: {servicio} · {etiqueta}\n"
+        f"{_con_quien(cita)}"
+        f"Clienta: {cita['nombre']} · Folio {cita['folio']}\n"
+        f"Anticipo pedido: ${cita['anticipo_monto']:,}\n"
+        f"Concepto esperado: {cita['nombre']} / {cita['folio']}\n"
+        f"{_contacto(telefono)}\n\n"
+        f"Por qué:\n{razones}{extra}\n\n"
+        f"{estado}\nRevisa tu banco y escríbele a la clienta."
     )
 
 

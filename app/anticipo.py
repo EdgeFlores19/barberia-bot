@@ -27,6 +27,11 @@ DEFECTOS: dict[str, Any] = {
     "cancelar": {"reembolso": "nunca", "horas": 0},        # "nunca" | "hasta_horas"
     "reagendar": {"permitido": True, "max_veces": 1, "horas_minimas": 24, "conserva_anticipo": True},
     "resumen_hora": "20:00",
+    # True = el bot lee el comprobante (monto, cuenta, fecha, clave de rastreo) y solo confirma la
+    # cita si cuadra; si no, deja el apartado y avisa a la dueña (ADR 0011). Requiere DEEPSEEK_API_KEY.
+    "validar_comprobante": False,
+    # Cuánto se alarga el apartado mientras la dueña revisa un comprobante que no cuadró.
+    "revision_horas": 12,
 }
 
 
@@ -48,6 +53,25 @@ def activo(datos: dict[str, Any]) -> bool:
     if config.ANTICIPO_ACTIVO is not None:
         return config.ANTICIPO_ACTIVO
     return bool((datos.get("anticipo") or {}).get("activo", False))
+
+
+def validar_comprobante(datos: dict[str, Any]) -> bool:
+    """¿El bot lee el comprobante antes de confirmar? Solo con el anticipo activo.
+
+    La variable VALIDAR_COMPROBANTE (1/0) manda sobre el JSON; vacía, decide el JSON.
+    """
+    if not activo(datos):
+        return False
+    if config.VALIDAR_COMPROBANTE is not None:
+        return config.VALIDAR_COMPROBANTE
+    return bool(cfg(datos)["validar_comprobante"])
+
+
+def problemas_de_validacion(datos: dict[str, Any]) -> list[str]:
+    """Qué falta para leer comprobantes (vacío = todo bien o la validación está apagada)."""
+    if validar_comprobante(datos) and not config.DEEPSEEK_API_KEY:
+        return ["anticipo.validar_comprobante está activo pero falta DEEPSEEK_API_KEY"]
+    return []
 
 
 def monto(c: dict[str, Any]) -> int:
@@ -171,6 +195,16 @@ def texto_pago(c: dict[str, Any], folio: str, minutos: int, banco: str, clabe: s
             f"• Concepto: tu nombre y {folio}\n\n"
             f"Tienes {minutos} min para enviarme aquí el comprobante (foto, captura o PDF). "
             "Pasado ese tiempo el horario se libera.")
+
+
+def texto_en_revision(hasta: str | None) -> str:
+    """El comprobante llegó pero no se pudo validar solo: lo revisa la manicurista.
+
+    `hasta`: etiqueta del momento en que vence el apartado ("Lunes 26 oct · 11:00"), si sigue vigente.
+    """
+    espera = (f" Tu horario sigue apartado (hasta {hasta})." if hasta else "")
+    return ("Recibí tu comprobante ✅ La manicurista lo está revisando y te confirma tu cita "
+            f"por aquí en cuanto lo valide.{espera}")
 
 
 def texto_comprobante_ok(c: dict[str, Any], servicio: str, etiqueta: str, folio: str, precio: int | float) -> str:

@@ -12,6 +12,7 @@ Defensa contra prompt injection (el prompt solo PIDE; lo que protege es el códi
 """
 from __future__ import annotations
 
+import base64
 import logging
 import re
 import unicodedata
@@ -19,7 +20,7 @@ from typing import Any
 
 import httpx
 
-from . import config
+from . import comprobante, config
 
 log = logging.getLogger("ambar.llm")
 
@@ -201,3 +202,46 @@ async def responder(pregunta: str, datos: dict[str, Any]) -> dict[str, Any]:
         # Solo el tipo: el texto de algunas excepciones de red incluye la URL.
         log.warning("LLM no disponible (%s): se usan las reglas locales", type(exc).__name__)
         return {"texto": local or datos["fallback"], "fuente": "reglas" if local else "fallback"}
+
+
+async def leer_comprobante(contenido: bytes, mime: str) -> dict[str, Any] | None:
+    """Pasa la imagen de un comprobante a un modelo con visión y devuelve los campos que leyó.
+
+    El modelo solo transcribe. Lo que devuelve es un DATO que `comprobante.parsear` sanea y que
+    `comprobante.evaluar` compara en código: nunca llega a la clienta ni se interpreta como una
+    instrucción (por eso no pasa por `_guardia`, que es para texto que SÍ se le envía).
+    None = no se pudo leer (sin key, formato no legible, falla de red o respuesta inservible).
+    """
+    mime = (mime or "").lower().split(";")[0].strip()
+    if not config.DEEPSEEK_API_KEY or not contenido or mime not in comprobante.MIMES_LEGIBLES:
+        return None
+    imagen = f"data:{mime};base64,{base64.b64encode(contenido).decode()}"
+    try:
+        async with httpx.AsyncClient(timeout=config.LLM_TIMEOUT_S * 2) as client:
+            r = await client.post(
+                config.DEEPSEEK_URL,
+                headers={"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"},
+                json={
+                    "model": config.DEEPSEEK_VISION_MODEL,
+                    "messages": [{"role": "user", "content": [
+                        {"type": "text", "text": comprobante.PROMPT},
+                        # `detail: original`: los dígitos chicos del comprobante (clave de rastreo,
+                        # cuenta) no sobreviven a una reducción. Es una sola imagen por comprobante,
+                        # así que el costo extra es despreciable.
+                        {"type": "image_url",
+                         "image_url": {"url": imagen, "detail": "original"}},
+                    ]}],
+                    "temperature": 0,
+                    "max_tokens": 400,
+                },
+            )
+            r.raise_for_status()
+            texto = r.json()["choices"][0]["message"]["content"]
+    except Exception as exc:  # noqa: BLE001 - un fallo del lector manda el comprobante a revisión, no tumba nada
+        # Solo el tipo de error: nunca la respuesta ni la imagen, que traen datos bancarios.
+        log.warning("comprobante: el lector falló (%s)", type(exc).__name__)
+        return None
+    lectura = comprobante.parsear(texto)
+    if lectura is None:
+        log.warning("comprobante: la respuesta del lector no sirvió (%d caracteres)", len(texto or ""))
+    return lectura

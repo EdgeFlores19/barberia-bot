@@ -161,6 +161,7 @@ Lo que falta para operar de verdad está en los issues del repo.
 | [`0008`](docs/adr/0008-anticipo-con-comprobante.md) | Anticipo al agendar: apartado, comprobante por WhatsApp y verificación del dueño |
 | [`0009`](docs/adr/0009-concentrado-de-depositos.md) | Concentrado de depósitos: el corte del día para cuadrar a mano |
 | [`0010`](docs/adr/0010-varias-agendas.md) | Varias agendas: una persona por calendario, reparto con «cualquiera» y baja suave |
+| [`0011`](docs/adr/0011-validar-comprobante.md) | El bot lee el comprobante (monto, cuenta, fecha, clave de rastreo) y solo confirma si cuadra |
 
 ## Deploy (Render, plan Starter)
 

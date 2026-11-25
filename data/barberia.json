@@ -196,6 +196,8 @@
       "horas_minimas": 24,
       "conserva_anticipo": true
     },
-    "resumen_hora": "20:00"
+    "resumen_hora": "20:00",
+    "validar_comprobante": false,
+    "revision_horas": 12
   }
 }
