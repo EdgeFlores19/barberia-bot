@@ -111,6 +111,17 @@ def test_un_monto_distinto_deja_la_cita_apartada_y_avisa(datos, lector, dueno):
     assert dueno["revision"][0]["hasta"]                                     # el apartado se alargó
 
 
+def test_un_comprobante_que_no_cuadra_deja_la_sesion_resuelta(datos, lector, dueno):
+    cita = _apartado()
+    lector["lectura"] = _lectura(cita, monto=100.0)
+
+    _, sesion = asyncio.run(
+        engine.manejar(f"wa:{TEL_A}", "", datos, canal="wa", telefono=TEL_A, media=IMG))
+
+    assert store.obtener(cita["folio"])["estado"] == "pendiente"
+    assert sesion.resuelta is True
+
+
 def test_el_apartado_se_alarga_para_dar_tiempo_de_revisar(datos, lector, dueno):
     cita = _apartado(minutos=60)
     lector["lectura"] = _lectura(cita, monto=100.0)
@@ -180,6 +191,21 @@ def test_si_algo_falla_no_se_confirma_a_ciegas(datos, lector, dueno, falla):
 
     assert store.obtener(cita["folio"])["estado"] == "pendiente"
     assert len(dueno["revision"]) == 1
+
+
+def test_si_la_descarga_explota_la_cita_queda_pendiente_y_se_avisa(datos, lector, dueno, monkeypatch):
+    cita = _apartado()
+
+    async def explota(media_id):
+        raise RuntimeError("falla de red")
+
+    monkeypatch.setattr(engine.wa_cliente, "descargar_media", explota)
+
+    texto = _enviar(datos)
+
+    assert store.obtener(cita["folio"])["estado"] == "pendiente"
+    assert "revisando" in texto
+    assert len(dueno["revision"]) == 1 and dueno["anticipo"] == []
 
 
 def test_un_apartado_vencido_que_no_cuadra_no_se_alarga_y_se_avisa_como_tardio(datos, lector, dueno):

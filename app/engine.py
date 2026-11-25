@@ -1480,17 +1480,22 @@ async def _validar_comprobante(cita: dict[str, Any], media: dict[str, str], ahor
     """Baja el archivo, lo lee el modelo con visión y se compara contra lo que debía traer."""
     if (media.get("mime") or "").lower() == "application/pdf":
         return comprobante.sin_lectura("Mandó un PDF: el bot solo lee fotos y capturas.")
-    archivo = await wa_cliente.descargar_media(media.get("id", ""))
-    if archivo is None:
-        return comprobante.sin_lectura("No se pudo bajar el archivo de WhatsApp.")
-    lectura = await llm.leer_comprobante(*archivo)
-    clave = (lectura or {}).get("clave_rastreo")
-    # Se registra aunque otra regla falle: así un comprobante rechazado tampoco sirve en otra cita.
-    clave_de = store.registrar_clave(clave, cita["folio"]) if clave else None
-    return comprobante.evaluar(
-        lectura, monto=cita["anticipo_monto"], folio=cita["folio"], clabe=config.ANTICIPO_CLABE,
-        titular=config.ANTICIPO_TITULAR, desde=datetime.fromisoformat(cita["creada"]).date(),
-        hoy=ahora.date(), clave_de=clave_de)
+    try:
+        archivo = await wa_cliente.descargar_media(media.get("id", ""))
+        if archivo is None:
+            return comprobante.sin_lectura("No se pudo bajar el archivo de WhatsApp.")
+        lectura = await llm.leer_comprobante(*archivo)
+        clave = (lectura or {}).get("clave_rastreo")
+        # Se registra aunque otra regla falle: así un comprobante rechazado tampoco sirve en otra cita.
+        clave_de = store.registrar_clave(clave, cita["folio"]) if clave else None
+        return comprobante.evaluar(
+            lectura, monto=cita["anticipo_monto"], folio=cita["folio"], clabe=config.ANTICIPO_CLABE,
+            titular=config.ANTICIPO_TITULAR, desde=datetime.fromisoformat(cita["creada"]).date(),
+            hoy=ahora.date(), clave_de=clave_de)
+    except Exception as e:  # noqa: BLE001 — una falla del lector no puede tumbar el turno
+        # Solo el tipo: el mensaje de la excepción puede traer datos del comprobante.
+        log.warning("comprobante: falla interna en la lectura (%s); va a revisión manual", type(e).__name__)
+        return comprobante.sin_lectura("No se pudo revisar el comprobante (falla interna).")
 
 
 def _texto_validacion(v: comprobante.Veredicto) -> str:
@@ -1517,7 +1522,7 @@ async def _comprobante_en_revision(s: Sesion, cita: dict[str, Any], v: comproban
         avisos.notificar_comprobante_revision, cita=cita, servicio=sv["nombre"],
         etiqueta=_etiqueta_slot(cita["slot"]), telefono=s.telefono, motivos=v.motivos,
         avisos=v.avisos, hasta=hasta, tardio=tardio)
-    s.folio, s.nombre, s.paso = cita["folio"], cita["nombre"], "fin"
+    s.folio, s.nombre, s.paso, s.resuelta = cita["folio"], cita["nombre"], "fin", True
     return [_t(anticipo.texto_en_revision(hasta)), _b("¿Algo más?", MENU)], s
 
 
